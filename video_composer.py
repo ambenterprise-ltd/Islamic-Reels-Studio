@@ -46,7 +46,8 @@ hti = Html2Image(
         '--disable-gpu',                
         '--disable-dev-shm-usage',      
         '--disable-software-rasterizer',
-        '--headless'  
+        '--headless',
+        '--allow-file-access-from-files'
     ]
 )
 
@@ -62,7 +63,9 @@ elif os.path.exists(edge_path):
     hti.browser.executable = edge_path
 
 def get_sequential_background():
-    videos = glob.glob(os.path.join(install_dir, "backgrounds", "*.mp4"))
+    videos = glob.glob(os.path.join(install_dir, "backgrounds", "**", "*.mp4"), recursive=True)
+    if not videos:
+        videos = glob.glob(os.path.join(install_dir, "backgrounds", "*.mp4"))
     if not videos: return None
     videos.sort(key=lambda f: int(re.sub(r'\D', '', f) or 0))
     index_file = "last_bg_index.txt"
@@ -127,7 +130,29 @@ def fetch_api_background(pixabay_key, pexels_key):
         print(f"   > ⚠️ Live API streaming error ({error}). Triggering immediate local fallback sequence...")
     return None
 
-def build_master_background(total_duration, enable_hook=True, enable_dynamic=True, use_online_clips=False, pixabay_key="", pexels_key=""):
+def build_master_background(total_duration, enable_hook=True, enable_dynamic=True, use_online_clips=False, pixabay_key="", pexels_key="", preselected_bg=None):
+    print("   > 🎞️ Assembling Background Track...")
+
+    # 🌟 Semantic Fast-Path: use the pre-selected themed video from news_gatherer
+    if preselected_bg and os.path.exists(preselected_bg):
+        print(f"   > 🎯 Loading Pre-Selected Semantic Video: {os.path.basename(preselected_bg)}")
+        bg_clip = VideoFileClip(preselected_bg).without_audio()
+        bg_clip = crop_to_9_16(bg_clip)
+        video_duration = bg_clip.duration
+
+        if bg_clip.duration <= 25.0 and total_duration > bg_clip.duration:
+            print(f"   > 🔄 Video ({bg_clip.duration:.1f}s) triggered loop to cover audio ({total_duration:.1f}s).")
+            bg_clip = bg_clip.fx(vfx.loop, duration=total_duration)
+        elif total_duration > bg_clip.duration:
+            # Absolute safety net: catches math variances for unlooped long videos
+            bg_clip = bg_clip.fx(vfx.loop, duration=total_duration)
+        else:
+            print(f"   > ✂️ No loop needed. Trimming video ({bg_clip.duration:.1f}s) to match audio ({total_duration:.1f}s).")
+            bg_clip = bg_clip.subclip(0, total_duration)
+
+        return bg_clip, os.path.basename(preselected_bg), []
+
+    # --- Original fallback pipeline (hook clips + local/API stitching) ---
     print("   > 🎞️ Assembling Dynamic Background Track...")
     clips_to_concat = []
     cut_times = []
@@ -159,7 +184,9 @@ def build_master_background(total_duration, enable_hook=True, enable_dynamic=Tru
             except Exception as e:
                 print(f"   > ⚠️ Warning: Failed to process hook clip {hook_path}: {e}")
 
-    local_bg_files = glob.glob(os.path.join(install_dir, "backgrounds", "*.mp4"))
+    local_bg_files = glob.glob(os.path.join(install_dir, "backgrounds", "**", "*.mp4"), recursive=True)
+    if not local_bg_files:
+        local_bg_files = glob.glob(os.path.join(install_dir, "backgrounds", "*.mp4"))
 
     if enable_dynamic:
         random.shuffle(local_bg_files)
@@ -334,7 +361,7 @@ def create_reference_badge_via_html(reference_text, font_path, ref_font_path, re
         os.remove(temp_html_path)
     return os.path.join(TEMP_DIR, output_filename)
 
-def generate_cinematic_video(sequence_data, reference_text, font_path, sub_font_path, eng_font_path, ref_font_path, text_color, sub_text_color, eng_text_color, ref_text_color, font_size_px, sub_font_size_px, eng_font_size_px, ref_font_size_px, ref_bg_opacity, main_y_pos, ref_y_pos, output_filename="final_reel.mp4", bg_blur_enabled=False, bg_blur_intensity=15, cpu_core_limit="1 Core (Low-End PC/VPS)", subtitle_style="Karaoke (Word Glow)", abort_check=None, enable_reciter_hook=True, enable_dynamic_scenes=True, sfx_path="", cinematic_arabic_size=180, use_online_clips=False, pixabay_key="", pexels_key=""):
+def generate_cinematic_video(sequence_data, reference_text, font_path, sub_font_path, eng_font_path, ref_font_path, text_color, sub_text_color, eng_text_color, ref_text_color, font_size_px, sub_font_size_px, eng_font_size_px, ref_font_size_px, ref_bg_opacity, main_y_pos, ref_y_pos, output_filename="final_reel.mp4", bg_blur_enabled=False, bg_blur_intensity=15, cpu_core_limit="1 Core (Low-End PC/VPS)", subtitle_style="Karaoke (Word Glow)", abort_check=None, enable_reciter_hook=False, enable_dynamic_scenes=False, sfx_path="", cinematic_arabic_size=180, use_online_clips=False, pixabay_key="", pexels_key="", preselected_bg=None):
     print(f"\n--- 🎬 ASSEMBLING DYNAMIC 1080P REEL ---")
     
     audio_clips = []
@@ -360,7 +387,8 @@ def generate_cinematic_video(sequence_data, reference_text, font_path, sub_font_
             enable_dynamic=enable_dynamic_scenes,
             use_online_clips=use_online_clips,
             pixabay_key=pixabay_key,
-            pexels_key=pexels_key
+            pexels_key=pexels_key,
+            preselected_bg=preselected_bg  # 🌟 Semantic video forwarded from caller
         )
 
         if enable_dynamic_scenes and sfx_path and os.path.isfile(sfx_path):
@@ -421,23 +449,15 @@ def generate_cinematic_video(sequence_data, reference_text, font_path, sub_font_
                 display_start = chunk_start
                 display_duration = chunk_duration
                 
-                # 🌟 THE HARD TRIM LOGIC (Fixes the text stacking issue)
-                if enable_dynamic_scenes and enable_reciter_hook:
-                    if chunk_end <= 5.0:
-                        continue # Completely skips chunks that happen inside the 5-second hook
-                    elif chunk_start < 5.0:
-                        display_start = 5.0 # Forces overlapping chunks to start exactly at 5.0s
-                        display_duration = chunk_end - 5.0
-                
                 all_chunks_data.append({
                     "ar_words_list": ar_words_in_chunk,
-                    "ur_text": ur_chunk if not enable_dynamic_scenes else None,
-                    "eng_text": eng_chunk if not enable_dynamic_scenes else None,
+                    "ur_text": ur_chunk,
+                    "eng_text": eng_chunk,
                     "lang_mode": mode_for_html,
                     "output_filename": f"chunk_{idx}_{chunk_idx}_{random.randint(100,999)}.png",
                     "duration": display_duration,
                     "start_time": display_start,
-                    "active_font_size": cinematic_arabic_size if enable_dynamic_scenes else font_size_px
+                    "active_font_size": font_size_px
                 })
 
         if all_chunks_data:

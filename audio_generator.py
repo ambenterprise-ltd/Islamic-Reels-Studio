@@ -188,7 +188,7 @@ def prepare_audio_timeline(verses_data, mode, acoustic_profile="Default (Raw Aud
         main_audio_path = None
         entry = {"surah_name": verse['surah_name'], "ayah_num": verse['ayah_num']}
 
-        if mode in ["Arabic Only", "Arabic + Urdu"]:
+        if mode == "Arabic Only":
             main_audio_path = download_arabic_audio(verse['audio_url'], ar_path)
             entry.update({"text": verse['arabic'], "eng_text": verse['english'], "lang": "arabic"})
             
@@ -202,7 +202,7 @@ def prepare_audio_timeline(verses_data, mode, acoustic_profile="Default (Raw Aud
             main_audio_path = en_path
             entry.update({"text": verse['english'], "eng_text": None, "lang": "english"})
             
-        elif mode == "Arabic Voice + Bilingual (Urdu)":
+        elif mode in ["Arabic + Urdu", "Arabic Voice + Bilingual (Urdu)"]:
             main_audio_path = download_arabic_audio(verse['audio_url'], ar_path)
             entry.update({"text": verse['arabic'], "sub_text": verse['urdu'], "eng_text": verse['english'], "lang": "bilingual"})
             

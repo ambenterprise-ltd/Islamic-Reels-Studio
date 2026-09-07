@@ -211,8 +211,34 @@ class IslamicReelsStudio(ctk.CTk):
 
         ctk.CTkLabel(self.content_card, text="Ayah No:", font=ctk.CTkFont(size=13)).pack(side="left", padx=5)
         self.ayah_entry = ctk.CTkEntry(self.content_card, width=70, corner_radius=6)
-        self.ayah_entry.pack(side="left")
+        self.ayah_entry.pack(side="left", padx=(0, 25))
         self.ayah_entry.bind("<KeyRelease>", lambda e: self.save_main_ui_settings())
+
+        # 🎬 Topic / Theme Dropdown Selector
+        ctk.CTkLabel(self.content_card, text="🎬 Topic Target:", font=ctk.CTkFont(weight="bold", size=13)).pack(side="left", padx=(10, 8))
+        self.theme_var = ctk.StringVar(value="🎲 Auto / Random")
+        self.theme_menu = ctk.CTkOptionMenu(
+            self.content_card,
+            variable=self.theme_var,
+            values=[
+                "🎲 Auto / Random",
+                "💀 Death (موت)",
+                "🪦 Grave (قبر)",
+                "🔥 Hell / Fire (جہنم)",
+                "💰 Wealth (مال)",
+                "🌿 Nature & Creation (قدرت)",
+                "❤️ Emotional & Mercy (رحمت)",
+                "🕊️ Peaceful & Faith (سکون)",
+                "🌙 Relaxing (راحت)",
+                "⚡ Motivated (استقامت)",
+                "🤝 Manners & Ethics (اخلاق)",
+                "🤲 Dua (دعا)",
+                "🕌 Sajda & Prayer (نماز و سجدہ)"
+            ],
+            width=210,
+            command=self.save_main_ui_settings
+        )
+        self.theme_menu.pack(side="left", padx=5)
 
         self.status_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=15)
         self.status_card.pack(pady=15, padx=40, fill="x")
@@ -331,11 +357,13 @@ class IslamicReelsStudio(ctk.CTk):
             "main_y_pos": 40, "ref_y_pos": 76,        
             "min_duration": 20, "eng_sub": True,
             "custom_verse_enabled": False, "custom_surah": "1", "custom_ayah": "1",
+            "selected_theme": "🎲 Auto / Random",
             "fb_token": "", "fb_page_id": "", "ig_account_id": "",
             "run_in_background": False, "auto_upload": False, "upload_interval": 2,
             "cpu_core_limit": "1 Core (Low-End PC/VPS)",
             "enable_yt": True, "enable_fb": True, "enable_ig": True,
             "personal_sheet_url": "", 
+            "groq_keys": [],
             "logo_path": "", "logo_size": 150, "logo_align": "Top-Right",
             "wm_text": "@IslamicReels", "wm_color": "#FFFFFF", "wm_align": "Bottom-Center",
             "cta_text": "Like & Follow for Daily Reminders!"
@@ -392,6 +420,9 @@ class IslamicReelsStudio(ctk.CTk):
         self.ayah_entry.delete(0, 'end')
         self.ayah_entry.insert(0, self.get_active_setting("custom_ayah", "1"))
 
+        theme_name = self.get_active_setting("selected_theme", "🎲 Auto / Random")
+        self.theme_var.set(theme_name)
+
         self.yt_toggle.set(self.get_active_setting("enable_yt", True))
         self.fb_toggle.set(self.get_active_setting("enable_fb", True))
         self.insta_toggle.set(self.get_active_setting("enable_ig", True))
@@ -403,6 +434,7 @@ class IslamicReelsStudio(ctk.CTk):
         self.set_active_setting("custom_ayah", self.ayah_entry.get())
         self.set_active_setting("reciter_name", self.reciter_var.get()) 
         self.set_active_setting("render_mode", self.lang_var.get())
+        self.set_active_setting("selected_theme", self.theme_var.get())
         self.save_settings()
 
     def countdown_worker(self):
@@ -814,21 +846,7 @@ class IslamicReelsStudio(ctk.CTk):
         scroll_visuals.pack(fill="both", expand=True)
         available_fonts = self.scan_fonts()
 
-        ctk.CTkLabel(scroll_visuals, text="--- Platform Video Styles ---", font=ctk.CTkFont(weight="bold"), text_color="#F39C12").pack(pady=(10, 5))
-        
-        style_opts = ["Cinematic (Reciter + Fast Cuts)", "Traditional (Static Loop)"]
-        
-        ig_style_frame = ctk.CTkFrame(scroll_visuals, fg_color="transparent")
-        ig_style_frame.pack(pady=5, fill="x")
-        ctk.CTkLabel(ig_style_frame, text="Instagram/FB Style:").pack(side="left", padx=10)
-        ig_style_var = ctk.StringVar(value=self.get_active_setting("ig_video_style", "Cinematic (Reciter + Fast Cuts)"))
-        ctk.CTkOptionMenu(ig_style_frame, variable=ig_style_var, values=style_opts, width=220, command=lambda v: self.set_active_setting("ig_video_style", v)).pack(side="right", padx=10)
-
-        yt_style_frame = ctk.CTkFrame(scroll_visuals, fg_color="transparent")
-        yt_style_frame.pack(pady=5, fill="x")
-        ctk.CTkLabel(yt_style_frame, text="YouTube Shorts Style:").pack(side="left", padx=10)
-        yt_style_var = ctk.StringVar(value=self.get_active_setting("yt_video_style", "Traditional (Static Loop)"))
-        ctk.CTkOptionMenu(yt_style_frame, variable=yt_style_var, values=style_opts, width=220, command=lambda v: self.set_active_setting("yt_video_style", v)).pack(side="right", padx=10)
+        ctk.CTkLabel(scroll_visuals, text="Active Core Style: Semantic Video Router (Dynamic Folders)", font=ctk.CTkFont(weight="bold", size=13), text_color="#F39C12").pack(pady=(15, 10))
         
         ctk.CTkLabel(scroll_visuals, text="--- Cinematic Effects ---", font=ctk.CTkFont(weight="bold"), text_color="#00D2FF").pack(pady=(15, 5))
         
@@ -1062,10 +1080,36 @@ class IslamicReelsStudio(ctk.CTk):
         # ==========================================
         # --- TAB 3: ACCOUNTS & API ---
         # ==========================================
-        api_frame = ctk.CTkFrame(tabview.tab("Accounts & API"), fg_color="transparent")
+        api_frame = ctk.CTkScrollableFrame(tabview.tab("Accounts & API"), fg_color="transparent")
         api_frame.pack(fill="both", expand=True, pady=10)
         
-        ctk.CTkLabel(api_frame, text="Meta Data (Facebook & Instagram)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(10, 5))
+        ctk.CTkLabel(api_frame, text="Groq Cloud API (LLM Semantic Router)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(10, 5))
+        ctk.CTkLabel(api_frame, text="Groq API Keys (One per line):", font=ctk.CTkFont(size=12)).pack(anchor="w", pady=(2, 2))
+        groq_keys_box = ctk.CTkTextbox(api_frame, height=90, font=("Consolas", 12))
+        groq_keys_box.pack(fill="x", pady=(0, 10))
+
+        # Populate with existing keys (or legacy groq_api_key fallback)
+        existing_groq_keys = self.get_active_setting("groq_keys", [])
+        if not existing_groq_keys:
+            legacy_key = self.get_active_setting("groq_api_key", "")
+            if legacy_key:
+                if isinstance(legacy_key, list):
+                    existing_groq_keys = legacy_key
+                elif isinstance(legacy_key, str):
+                    existing_groq_keys = [k.strip() for k in legacy_key.replace(",", "\n").splitlines() if k.strip()]
+        if isinstance(existing_groq_keys, list):
+            groq_keys_box.insert("1.0", "\n".join(existing_groq_keys))
+        elif isinstance(existing_groq_keys, str) and existing_groq_keys.strip():
+            groq_keys_box.insert("1.0", existing_groq_keys.strip())
+
+        def save_groq_keys_to_profile(*args):
+            raw_keys = groq_keys_box.get("1.0", "end")
+            keys_list = [k.strip() for k in raw_keys.splitlines() if k.strip()]
+            self.set_active_setting("groq_keys", keys_list)
+
+        groq_keys_box.bind("<KeyRelease>", save_groq_keys_to_profile)
+
+        ctk.CTkLabel(api_frame, text="Meta Data (Facebook & Instagram)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(15, 5))
         make_entry(api_frame, "FB Access Token:", "fb_token", is_password=True)
         make_entry(api_frame, "FB Page ID:", "fb_page_id")
         make_entry(api_frame, "Instagram ID:", "ig_account_id")
@@ -1149,6 +1193,7 @@ class IslamicReelsStudio(ctk.CTk):
         ctk.CTkLabel(cta_row, text="CTA Line (Caption):").pack(side="left", padx=(0, 10))
         make_entry(cta_row, "", "cta_text").pack(side="left", fill="x", expand=True)
         def save_and_close():
+            save_groq_keys_to_profile()
             # Settings are auto-saved in memory on change, so we save to settings.json file directly
             self.save_settings()
             self.refresh_status_bg() 
@@ -1206,8 +1251,23 @@ class IslamicReelsStudio(ctk.CTk):
             reciter_name = prof_settings.get("reciter_name", "Sheikh Husary (Safe)")
             reciter_code = RECITER_CODES.get(reciter_name, "ar.husary")
 
+            groq_keys = prof_settings.get("groq_keys", [])
+            if not groq_keys and prof_settings.get("groq_api_key"):
+                legacy_key = prof_settings.get("groq_api_key")
+                if isinstance(legacy_key, list):
+                    groq_keys = legacy_key
+                elif isinstance(legacy_key, str):
+                    groq_keys = [k.strip() for k in legacy_key.replace(",", "\n").splitlines() if k.strip()]
+
+            selected_theme = prof_settings.get("selected_theme", "🎲 Auto / Random")
+
             print("   > 🔎 [STEP 1] Fetching Quran text and translation from API...")
-            quran_data = news_gatherer.get_quran_data(target_dur, c_surah, c_ayah, reciter_code, prof_settings.get("render_mode", "Arabic Voice + Bilingual (Urdu)"))
+            quran_data = news_gatherer.get_quran_data(
+                target_dur, c_surah, c_ayah, reciter_code,
+                prof_settings.get("render_mode", "Arabic Voice + Bilingual (Urdu)"),
+                groq_keys=groq_keys,
+                selected_theme=selected_theme
+            )
             if not quran_data:
                 print("❌ Pipeline Halted: Could not fetch data.")
                 return False, None
@@ -1259,9 +1319,6 @@ class IslamicReelsStudio(ctk.CTk):
             selected_ref_font = prof_settings.get("ref_font", selected_font)
             final_ref_font_path = r"C:\Windows\Fonts\tahoma.ttf" if selected_ref_font == "Default Windows Font (Arial/Tahoma)" else os.path.join(install_dir, "font", selected_ref_font)
             
-            ig_style = prof_settings.get("ig_video_style", "Cinematic (Reciter + Fast Cuts)")
-            yt_style = prof_settings.get("yt_video_style", "Traditional (Static Loop)")
-            
             enable_ig_fb = insta_active or fb_active
             enable_yt = yt_active
 
@@ -1270,77 +1327,34 @@ class IslamicReelsStudio(ctk.CTk):
             bg_name = "No_BG"
 
             print("   > 🔎 [STEP 4] Booting Render Engine...")
+            print(f"   > 🛡️ Platform Status: YouTube={'ON' if enable_yt else 'OFF'}, Instagram={'ON' if insta_active else 'OFF'}, Facebook={'ON' if fb_active else 'OFF'}")
+            print("   > ⚡ Core Engine: Rendering Unified Track (Semantic Video Router)...")
             
-            if enable_ig_fb and enable_yt and (ig_style == yt_style):
-                print(f"   > ⚡ OPTIMIZATION: Both platforms share style ({ig_style}). Rendering single track...")
-                hook = True if "Cinematic" in ig_style else False
-                render_success, bg_name = video_composer.generate_cinematic_video(
-                    sequence_data=sequence_data, reference_text=dynamic_ref, font_path=final_font_path,
-                    sub_font_path=final_sub_font_path, eng_font_path=final_eng_font_path, ref_font_path=final_ref_font_path,
-                    text_color=prof_settings.get("color", "#FFD700"), sub_text_color=prof_settings.get("sub_color", "#FFFFFF"),
-                    eng_text_color=prof_settings.get("eng_color", "#A8E6CF"), ref_text_color=prof_settings.get("ref_color", "#FFFFFF"),
-                    font_size_px=prof_settings.get("size", 140), sub_font_size_px=prof_settings.get("sub_size", 80),
-                    eng_font_size_px=prof_settings.get("eng_size", 40), ref_font_size_px=prof_settings.get("ref_size", 24),
-                    ref_bg_opacity=prof_settings.get("ref_bg_opacity", 0.25), main_y_pos=prof_settings.get("main_y_pos", 40),
-                    ref_y_pos=prof_settings.get("ref_y_pos", 76), output_filename=temp_video_path,
-                    bg_blur_enabled=prof_settings.get("bg_blur_enabled", False), bg_blur_intensity=prof_settings.get("bg_blur_intensity", 15),
-                    cpu_core_limit=prof_settings.get("cpu_core_limit", "1 Core (Low-End PC/VPS)"), subtitle_style=prof_settings.get("subtitle_style", "Karaoke (Word Glow)"), 
-                    abort_check=lambda: getattr(self, 'is_running', True),
-                    enable_reciter_hook=hook, enable_dynamic_scenes=hook,
-                    sfx_path=prof_settings.get("sfx_path", ""), cinematic_arabic_size=prof_settings.get("cinematic_arabic_size", 180),
-                    use_online_clips=prof_settings.get("use_online_clips", False), pixabay_key=prof_settings.get("pixabay_key", ""), pexels_key=prof_settings.get("pexels_key", "")
-                )
-                if render_success:
-                    shutil.copy2(temp_video_path, ig_video_path)
-                    shutil.copy2(temp_video_path, yt_video_path)
-                    generated_paths['ig'] = ig_video_path
-                    generated_paths['yt'] = yt_video_path
-                    try: os.remove(temp_video_path)
-                    except: pass
-            else:
-                if enable_ig_fb:
-                    print(f"   > 🎬 [STEP 4A] Rendering Instagram/FB Video - Style: {ig_style}")
-                    hook = True if "Cinematic" in ig_style else False
-                    success, b = video_composer.generate_cinematic_video(
-                        sequence_data=sequence_data, reference_text=dynamic_ref, font_path=final_font_path,
-                        sub_font_path=final_sub_font_path, eng_font_path=final_eng_font_path, ref_font_path=final_ref_font_path,
-                        text_color=prof_settings.get("color", "#FFD700"), sub_text_color=prof_settings.get("sub_color", "#FFFFFF"),
-                        eng_text_color=prof_settings.get("eng_color", "#A8E6CF"), ref_text_color=prof_settings.get("ref_color", "#FFFFFF"),
-                        font_size_px=prof_settings.get("size", 140), sub_font_size_px=prof_settings.get("sub_size", 80),
-                        eng_font_size_px=prof_settings.get("eng_size", 40), ref_font_size_px=prof_settings.get("ref_size", 24),
-                        ref_bg_opacity=prof_settings.get("ref_bg_opacity", 0.25), main_y_pos=prof_settings.get("main_y_pos", 40),
-                        ref_y_pos=prof_settings.get("ref_y_pos", 76), output_filename=ig_video_path, bg_blur_enabled=prof_settings.get("bg_blur_enabled", False), 
-                        bg_blur_intensity=prof_settings.get("bg_blur_intensity", 15), cpu_core_limit=prof_settings.get("cpu_core_limit", "1 Core (Low-End PC/VPS)"), 
-                        subtitle_style=prof_settings.get("subtitle_style", "Karaoke (Word Glow)"), abort_check=lambda: getattr(self, 'is_running', True),
-                        enable_reciter_hook=hook, enable_dynamic_scenes=hook,
-                        sfx_path=prof_settings.get("sfx_path", ""), cinematic_arabic_size=prof_settings.get("cinematic_arabic_size", 180),
-                        use_online_clips=prof_settings.get("use_online_clips", False), pixabay_key=prof_settings.get("pixabay_key", ""), pexels_key=prof_settings.get("pexels_key", "")
-                    )
-                    if success: 
-                        generated_paths['ig'] = ig_video_path
-                        bg_name = b
-
-                if enable_yt:
-                    print(f"   > 🎬 [STEP 4B] Rendering YouTube Video - Style: {yt_style}")
-                    hook = True if "Cinematic" in yt_style else False
-                    success, b = video_composer.generate_cinematic_video(
-                        sequence_data=sequence_data, reference_text=dynamic_ref, font_path=final_font_path,
-                        sub_font_path=final_sub_font_path, eng_font_path=final_eng_font_path, ref_font_path=final_ref_font_path,
-                        text_color=prof_settings.get("color", "#FFD700"), sub_text_color=prof_settings.get("sub_color", "#FFFFFF"),
-                        eng_text_color=prof_settings.get("eng_color", "#A8E6CF"), ref_text_color=prof_settings.get("ref_color", "#FFFFFF"),
-                        font_size_px=prof_settings.get("size", 140), sub_font_size_px=prof_settings.get("sub_size", 80),
-                        eng_font_size_px=prof_settings.get("eng_size", 40), ref_font_size_px=prof_settings.get("ref_size", 24),
-                        ref_bg_opacity=prof_settings.get("ref_bg_opacity", 0.25), main_y_pos=prof_settings.get("main_y_pos", 40),
-                        ref_y_pos=prof_settings.get("ref_y_pos", 76), output_filename=yt_video_path, bg_blur_enabled=prof_settings.get("bg_blur_enabled", False), 
-                        bg_blur_intensity=prof_settings.get("bg_blur_intensity", 15), cpu_core_limit=prof_settings.get("cpu_core_limit", "1 Core (Low-End PC/VPS)"), 
-                        subtitle_style=prof_settings.get("subtitle_style", "Karaoke (Word Glow)"), abort_check=lambda: getattr(self, 'is_running', True),
-                        enable_reciter_hook=hook, enable_dynamic_scenes=hook,
-                        sfx_path=prof_settings.get("sfx_path", ""), cinematic_arabic_size=prof_settings.get("cinematic_arabic_size", 180),
-                        use_online_clips=prof_settings.get("use_online_clips", False), pixabay_key=prof_settings.get("pixabay_key", ""), pexels_key=prof_settings.get("pexels_key", "")
-                    )
-                    if success: 
-                        generated_paths['yt'] = yt_video_path
-                        bg_name = b
+            render_success, bg_name = video_composer.generate_cinematic_video(
+                sequence_data=sequence_data, reference_text=dynamic_ref, font_path=final_font_path,
+                sub_font_path=final_sub_font_path, eng_font_path=final_eng_font_path, ref_font_path=final_ref_font_path,
+                text_color=prof_settings.get("color", "#FFD700"), sub_text_color=prof_settings.get("sub_color", "#FFFFFF"),
+                eng_text_color=prof_settings.get("eng_color", "#A8E6CF"), ref_text_color=prof_settings.get("ref_color", "#FFFFFF"),
+                font_size_px=prof_settings.get("size", 140), sub_font_size_px=prof_settings.get("sub_size", 80),
+                eng_font_size_px=prof_settings.get("eng_size", 40), ref_font_size_px=prof_settings.get("ref_size", 24),
+                ref_bg_opacity=prof_settings.get("ref_bg_opacity", 0.25), main_y_pos=prof_settings.get("main_y_pos", 40),
+                ref_y_pos=prof_settings.get("ref_y_pos", 76), output_filename=temp_video_path,
+                bg_blur_enabled=prof_settings.get("bg_blur_enabled", False), bg_blur_intensity=prof_settings.get("bg_blur_intensity", 15),
+                cpu_core_limit=prof_settings.get("cpu_core_limit", "1 Core (Low-End PC/VPS)"), subtitle_style=prof_settings.get("subtitle_style", "Karaoke (Word Glow)"), 
+                abort_check=lambda: getattr(self, 'is_running', True),
+                sfx_path=prof_settings.get("sfx_path", ""), cinematic_arabic_size=prof_settings.get("cinematic_arabic_size", 180),
+                use_online_clips=prof_settings.get("use_online_clips", False), pixabay_key=prof_settings.get("pixabay_key", ""), pexels_key=prof_settings.get("pexels_key", ""),
+                preselected_bg=quran_data.get("preselected_bg")
+            )
+            
+            if render_success:
+                shutil.copy2(temp_video_path, ig_video_path)
+                shutil.copy2(temp_video_path, yt_video_path)
+                generated_paths['ig'] = ig_video_path
+                generated_paths['yt'] = yt_video_path
+                generated_paths['local'] = ig_video_path
+                try: os.remove(temp_video_path)
+                except: pass
 
             if not generated_paths:
                 print("   > ❌ Pipeline aborted: Render completely failed.")
