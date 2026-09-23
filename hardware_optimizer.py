@@ -37,6 +37,15 @@ def get_system_ram_gb():
             stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
             return round(stat.ullTotalPhys / (1024 ** 3), 1)
+        elif os.path.exists("/proc/meminfo"):
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        return round(kb / (1024 ** 2), 1)
+        elif hasattr(os, 'sysconf'):
+            total_b = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+            return round(total_b / (1024 ** 3), 1)
     except Exception:
         pass
 
@@ -146,7 +155,15 @@ def trim_memory():
         gc.collect()
         if sys.platform == "win32":
             import ctypes
-            ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, ctypes.c_size_t(-1), ctypes.c_size_t(-1))
+            if hasattr(ctypes, 'windll') and hasattr(ctypes.windll, 'kernel32'):
+                ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, ctypes.c_size_t(-1), ctypes.c_size_t(-1))
+        elif sys.platform.startswith("linux"):
+            import ctypes
+            try:
+                libc = ctypes.CDLL("libc.so.6")
+                libc.malloc_trim(0)
+            except Exception:
+                pass
     except Exception:
         pass
 

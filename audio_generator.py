@@ -5,7 +5,17 @@ import os
 import sys
 import gc
 import warnings
-import time  # 🌟 ADDED: Required for the slow-internet retry delay
+import time
+
+# --- GLOBAL ENCODING FIX ---
+if sys.platform.startswith('win'):
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        try: sys.stdout.reconfigure(encoding='utf-8')
+        except Exception: pass
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        try: sys.stderr.reconfigure(encoding='utf-8')
+        except Exception: pass
+# ---------------------------
 
 # 🌟 UPGRADE 1: Suppress all Hugging Face token and symlink warnings
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -23,8 +33,10 @@ except ImportError:
 try:
     from pedalboard import Pedalboard, Reverb, Compressor, HighpassFilter, LowpassFilter
     from pedalboard.io import AudioFile
-except ImportError:
-    Pedalboard = None
+    HAS_PEDALBOARD = True
+except Exception:
+    HAS_PEDALBOARD = False
+    Pedalboard = Reverb = Compressor = HighpassFilter = LowpassFilter = AudioFile = None
 
 VOICES = {
     "urdu": "ur-PK-AsadNeural",
@@ -80,7 +92,12 @@ def get_whisper_model():
 
 def apply_acoustic_profile(audio_path, profile_name):
     """Applies cinematic Reverb and EQ to the audio based on UI selection."""
-    if profile_name == "Default (Raw Audio)" or Pedalboard is None:
+    if profile_name == "Default (Raw Audio)" or not HAS_PEDALBOARD or Pedalboard is None or AudioFile is None:
+        if profile_name != "Default (Raw Audio)" and not HAS_PEDALBOARD:
+            try:
+                print(f"   > ⚠️ Notice: Pedalboard Audio FX unavailable on this CPU architecture. Safely bypassing acoustic profile '{profile_name}'.")
+            except Exception:
+                print(f"   > [Notice] Pedalboard Audio FX unavailable on this CPU architecture. Safely bypassing acoustic profile '{profile_name}'.")
         return audio_path
         
     print(f"   > 🎛️ Applying Acoustic Profile: {profile_name}")

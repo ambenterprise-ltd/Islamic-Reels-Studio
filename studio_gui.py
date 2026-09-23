@@ -71,17 +71,50 @@ import json
 import time
 import shutil 
 from datetime import datetime
-import pystray
+try:
+    import pystray
+    HAS_PYSTRAY = True
+except Exception:
+    pystray = None
+    HAS_PYSTRAY = False
+
 from PIL import Image, ImageDraw, ImageTk
 import gc
-import winreg 
+import subprocess
+
+if sys.platform == "win32":
+    try:
+        import winreg
+    except Exception:
+        winreg = None
+else:
+    winreg = None
+
+def open_file_or_dir(path):
+    """Cross-platform helper to open a file or directory in the default system viewer."""
+    if not path or not os.path.exists(path):
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", path], check=False)
+        else:
+            subprocess.run(["xdg-open", path], check=False)
+    except Exception as e:
+        print(f"   > ⚠️ Notice opening path '{path}': {e}")
 
 if getattr(sys, 'frozen', False):
     install_dir = os.path.dirname(sys.executable)
 else:
     install_dir = os.path.dirname(os.path.abspath(__file__))
 
-app_data_dir = os.path.join(os.environ.get('APPDATA', ''), 'IslamicReelsStudio')
+if sys.platform == "win32":
+    app_data_root = os.environ.get('APPDATA', os.path.expanduser('~'))
+else:
+    app_data_root = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+
+app_data_dir = os.path.join(app_data_root, 'IslamicReelsStudio')
 creds_vault_dir = os.path.join(install_dir, 'credentials') 
 
 os.makedirs(app_data_dir, exist_ok=True)
@@ -692,24 +725,46 @@ class IslamicReelsStudio(ctk.CTk):
         else: print("   > ℹ️ Auto-Launch: App started with Windows, but Automation Loops are OFF. Standing by.")
 
     def hide_window(self):
-        self.withdraw()
-        image = Image.new('RGB', (64, 64), color=(46, 204, 113))
-        d = ImageDraw.Draw(image)
-        d.text((10, 25), "Q-Bot", fill=(255, 255, 255))
-        menu = (pystray.MenuItem('Show Dashboard', self.show_window), pystray.MenuItem('Exit Completely', self.quit_window))
-        self.tray_icon = pystray.Icon("IslamicReelsStudio", image, "Islamic Reels Studio", menu)
-        threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        if not HAS_PYSTRAY or pystray is None:
+            print("   > ⚠️ Notice: System tray (pystray) is not available or supported on this platform. Window remains active.")
+            return
 
-    def show_window(self, icon, item):
-        self.tray_icon.stop()
-        self.after(1000, self.deiconify)
+        try:
+            image = Image.new('RGB', (64, 64), color=(46, 204, 113))
+            d = ImageDraw.Draw(image)
+            d.text((10, 25), "Q-Bot", fill=(255, 255, 255))
+            menu = (pystray.MenuItem('Show Dashboard', self.show_window), pystray.MenuItem('Exit Completely', self.quit_window))
+            self.tray_icon = pystray.Icon("IslamicReelsStudio", image, "Islamic Reels Studio", menu)
 
-    def quit_window(self, icon, item):
-        self.tray_icon.stop()
+            def run_tray():
+                try:
+                    self.tray_icon.run()
+                except Exception as tray_err:
+                    print(f"   > ⚠️ System tray daemon/display unavailable ({tray_err}). Restoring standard window.")
+                    self.after(0, self.deiconify)
+
+            self.withdraw()
+            threading.Thread(target=run_tray, daemon=True).start()
+        except Exception as e:
+            print(f"   > ⚠️ Could not initialize system tray ({e}). Falling back to standard window.")
+            self.deiconify()
+
+    def show_window(self, icon=None, item=None):
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            try: self.tray_icon.stop()
+            except Exception: pass
+        self.after(500, self.deiconify)
+
+    def quit_window(self, icon=None, item=None):
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            try: self.tray_icon.stop()
+            except Exception: pass
         self.destroy()
         os._exit(0) 
 
     def toggle_windows_startup(self, enable):
+        if sys.platform != "win32" or winreg is None:
+            return
         if not getattr(sys, 'frozen', False): return
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         app_name = "IslamicReelsStudioAgency"

@@ -11,7 +11,12 @@ if getattr(sys, 'frozen', False):
 else:
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
-app_data_dir = os.path.join(os.environ.get('APPDATA', ''), 'IslamicReelsStudio')
+if sys.platform == "win32":
+    app_data_root = os.environ.get('APPDATA', os.path.expanduser('~'))
+else:
+    app_data_root = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+app_data_dir = os.path.join(app_data_root, 'IslamicReelsStudio')
+os.makedirs(app_data_dir, exist_ok=True)
 USED_BGS_FILE = os.path.join(app_data_dir, "used_backgrounds.json")
 POSTED_VERSES_FILE = os.path.join(app_data_dir, "posted_verses.json")
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import shutil
 import random
 import re
 import cv2
@@ -31,7 +32,11 @@ if getattr(sys, 'frozen', False):
 else:
     install_dir = os.path.dirname(os.path.abspath(__file__))
 
-app_data_dir = os.path.join(os.environ.get('APPDATA', ''), 'IslamicReelsStudio')
+if sys.platform == "win32":
+    app_data_root = os.environ.get('APPDATA', os.path.expanduser('~'))
+else:
+    app_data_root = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+app_data_dir = os.path.join(app_data_root, 'IslamicReelsStudio')
 TEMP_DIR = os.path.join(app_data_dir, "temp")
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.chdir(app_data_dir)
@@ -69,16 +74,30 @@ hti = Html2Image(
     ]
 )
 
-chrome_path_1 = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-chrome_path_2 = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+if sys.platform == "win32":
+    chrome_path_1 = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    chrome_path_2 = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+    edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    local_chrome = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
 
-if os.path.exists(chrome_path_1):
-    hti.browser.executable = chrome_path_1
-elif os.path.exists(chrome_path_2):
-    hti.browser.executable = chrome_path_2
-elif os.path.exists(edge_path):
-    hti.browser.executable = edge_path
+    for c_path in [chrome_path_1, chrome_path_2, edge_path, local_chrome]:
+        if os.path.exists(c_path):
+            hti.browser.executable = c_path
+            break
+else:
+    linux_cmds = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+    found_browser = False
+    for c_cmd in linux_cmds:
+        found_bin = shutil.which(c_cmd)
+        if found_bin and os.path.exists(found_bin):
+            hti.browser.executable = found_bin
+            found_browser = True
+            break
+    if not found_browser:
+        for c_path in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
+            if os.path.exists(c_path):
+                hti.browser.executable = c_path
+                break
 
 def get_all_background_files():
     search_dirs = [

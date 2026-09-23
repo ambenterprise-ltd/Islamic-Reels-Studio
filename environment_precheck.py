@@ -35,7 +35,6 @@ def run_environment_precheck(verbose=True):
         ("html2image", "Html2Image Subtitle Renderer"),
         ("edge_tts", "Edge TTS Audio Engine"),
         ("faster_whisper", "Faster Whisper AI Alignment"),
-        ("pedalboard", "Pedalboard Audio FX"),
         ("googleapiclient", "Google API Client (YouTube)"),
         ("gspread", "GSpread Google Sheets Logger"),
         ("requests", "Requests HTTP Client")
@@ -48,20 +47,51 @@ def run_environment_precheck(verbose=True):
         except ImportError:
             errors.append(f"Missing Required Library '{mod_name}' ({label}). Install via: pip install {mod_name}")
 
+    # Optional / Defensive Check for Pedalboard Audio FX
+    try:
+        __import__("pedalboard")
+        passed_items.append("Library: Pedalboard Audio FX (Acoustic Reverb/Enhancement)")
+    except Exception as pb_err:
+        warnings.append(f"Pedalboard Audio FX not available ({pb_err}). Studio will automatically use natural recitation audio without crash.")
+
     # 2. Check Browser Executable for HTML Subtitle Rendering
-    chrome_path_1 = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    chrome_path_2 = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-    edge_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-
     browser_found = False
-    for b_path in [chrome_path_1, chrome_path_2, edge_path]:
-        if os.path.exists(b_path):
-            browser_found = True
-            passed_items.append(f"Browser Renderer: {os.path.basename(b_path)}")
-            break
+    browser_name = None
 
-    if not browser_found:
-        warnings.append("No Google Chrome or Microsoft Edge executable found in standard Windows locations. Html2Image subtitle rendering may fail.")
+    if sys.platform == "win32":
+        win_browser_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+        ]
+        for b_path in win_browser_paths:
+            if os.path.exists(b_path):
+                browser_found = True
+                browser_name = os.path.basename(b_path)
+                break
+    else:
+        linux_cmds = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+        for cmd in linux_cmds:
+            which_path = shutil.which(cmd)
+            if which_path and os.path.exists(which_path):
+                browser_found = True
+                browser_name = cmd
+                break
+        if not browser_found:
+            for b_path in ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
+                if os.path.exists(b_path):
+                    browser_found = True
+                    browser_name = os.path.basename(b_path)
+                    break
+
+    if browser_found:
+        passed_items.append(f"Browser Renderer: {browser_name}")
+    else:
+        if sys.platform == "win32":
+            warnings.append("No Google Chrome or Microsoft Edge executable found in standard Windows locations. Html2Image subtitle rendering may fail.")
+        else:
+            warnings.append("No Google Chrome or Chromium executable found (google-chrome, chromium-browser). Html2Image subtitle rendering may fail. Install via: sudo apt-get install -y chromium")
 
     # 3. Check Folders and Assets
     if getattr(sys, 'frozen', False):
