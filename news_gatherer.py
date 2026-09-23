@@ -12,33 +12,116 @@ else:
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
 app_data_dir = os.path.join(os.environ.get('APPDATA', ''), 'IslamicReelsStudio')
-RECENT_BGS_FILE = os.path.join(app_data_dir, "recent_bgs.json")
+USED_BGS_FILE = os.path.join(app_data_dir, "used_backgrounds.json")
+POSTED_VERSES_FILE = os.path.join(app_data_dir, "posted_verses.json")
 
-def get_recent_bgs():
-    if os.path.exists(RECENT_BGS_FILE):
+def get_all_library_backgrounds():
+    """Returns a list of normalized paths for every background mp4 in backgrounds/ and bg/."""
+    all_bgs = []
+    for root_name in ["backgrounds", "bg", "new"]:
+        target_dir = os.path.join(base_dir, root_name)
+        if os.path.exists(target_dir) and os.path.isdir(target_dir):
+            for f in glob.glob(os.path.join(target_dir, "**", "*.mp4"), recursive=True):
+                norm = os.path.normpath(f)
+                if norm not in all_bgs:
+                    all_bgs.append(norm)
+    return all_bgs
+
+def get_used_bgs():
+    """Loads all used background video paths from used_backgrounds.json."""
+    if os.path.exists(USED_BGS_FILE):
         try:
-            with open(RECENT_BGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(USED_BGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return [os.path.normpath(p) for p in data]
         except Exception:
             pass
     return []
 
+# Backward compatible alias
+get_recent_bgs = get_used_bgs
+
 def record_used_bg(video_path):
+    """
+    Exhaustive Cycle: Records a background video as used.
+    Does NOT repeat any background video until EVERY video in backgrounds/ and bg/ has been used once.
+    When all backgrounds have been used, resets the history pool and shuffles again.
+    """
     if not video_path:
         return
     try:
         os.makedirs(app_data_dir, exist_ok=True)
-        history = get_recent_bgs()
+        history = get_used_bgs()
         norm_path = os.path.normpath(video_path)
-        if norm_path in history:
-            history.remove(norm_path)
-        history.append(norm_path)
-        if len(history) > 6:
-            history = history[-6:]
-        with open(RECENT_BGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f)
-    except Exception:
-        pass
+        if norm_path not in history:
+            history.append(norm_path)
+
+        all_bgs = get_all_library_backgrounds()
+        all_norm_set = set(all_bgs)
+
+        # If every video in the library has been used once, reset history pool
+        if all_norm_set and all_norm_set.issubset(set(history)):
+            print(f"   > 🔄 [BG CYCLE] Exhaustive cycle complete! All {len(all_norm_set)} background videos used once. Resetting history pool.")
+            history = [norm_path]
+
+        with open(USED_BGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+        print(f"   > 📋 [BG CYCLE] Recorded background ({len(history)}/{len(all_norm_set)} used in current cycle).")
+    except Exception as e:
+        print(f"   > ⚠️ Notice updating used backgrounds ledger: {e}")
+
+def get_posted_verses():
+    """Loads all previously posted Quran verse endpoints from posted_verses.json."""
+    if os.path.exists(POSTED_VERSES_FILE):
+        try:
+            with open(POSTED_VERSES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return {str(x).strip() for x in data if str(x).strip()}
+                elif isinstance(data, dict):
+                    return {str(k).strip() for k in data.keys() if str(k).strip()}
+        except Exception:
+            pass
+    return set()
+
+def record_posted_verses(verses_data):
+    """
+    Records verse endpoints (both 'Surah:Ayah' and absolute number) to posted_verses.json.
+    """
+    if not verses_data:
+        return
+    try:
+        os.makedirs(app_data_dir, exist_ok=True)
+        posted_set = get_posted_verses()
+        new_items = []
+        for v in verses_data:
+            if isinstance(v, dict):
+                surah = v.get("surah_num")
+                ayah = v.get("ayah_num")
+                abs_num = v.get("absolute_num")
+                if surah and ayah:
+                    endpoint_key = f"{surah}:{ayah}"
+                    if endpoint_key not in posted_set:
+                        posted_set.add(endpoint_key)
+                        new_items.append(endpoint_key)
+                if abs_num:
+                    abs_key = str(abs_num)
+                    if abs_key not in posted_set:
+                        posted_set.add(abs_key)
+                        new_items.append(abs_key)
+            elif isinstance(v, str):
+                s_val = v.strip()
+                if s_val and s_val not in posted_set:
+                    posted_set.add(s_val)
+                    new_items.append(s_val)
+
+        if new_items:
+            with open(POSTED_VERSES_FILE, "w", encoding="utf-8") as f:
+                json.dump(sorted(list(posted_set)), f, indent=2)
+            print(f"   > 📋 [VERSE LEDGER] Locked {len(new_items)} new verse keys into posted_verses.json (Total posted: {len(posted_set)}).")
+    except Exception as e:
+        print(f"   > ⚠️ Notice updating posted verses ledger: {e}")
 
 def get_semantic_video(english_text, groq_keys=None):
     if not groq_keys:
@@ -237,10 +320,19 @@ def get_video_and_duration(selection):
                                     candidates.append(found)
 
             if candidates:
-                # Filter out recently used backgrounds for variety
+                # Exhaustive cycle check: do not repeat any background until every video has been used once
                 fresh_candidates = [c for c in candidates if os.path.normpath(c) not in recent_bgs]
-                pool = fresh_candidates if fresh_candidates else candidates
-                selected_video = random.choice(pool)
+                if fresh_candidates:
+                    selected_video = random.choice(fresh_candidates)
+                else:
+                    all_bgs = get_all_library_backgrounds()
+                    all_fresh = [b for b in all_bgs if os.path.normpath(b) not in recent_bgs]
+                    if not all_fresh:
+                        print("   > 🔄 [BG CYCLE] All library backgrounds used once. Resetting pool.")
+                        recent_bgs.clear()
+                        selected_video = random.choice(candidates)
+                    else:
+                        selected_video = random.choice(all_fresh)
     
     # Tier 2: Broad Folder Matching or Fallback
     if not selected_video:
@@ -300,8 +392,19 @@ def get_video_and_duration(selection):
             return None, 0.0
                 
         fresh_videos = [v for v in videos if os.path.normpath(v) not in recent_bgs]
-        pool = fresh_videos if fresh_videos else videos
-        selected_video = random.choice(pool)
+        if fresh_videos:
+            selected_video = random.choice(fresh_videos)
+        else:
+            all_bgs = get_all_library_backgrounds()
+            all_fresh = [b for b in all_bgs if os.path.normpath(b) not in recent_bgs]
+            if not all_fresh:
+                print("   > 🔄 [BG CYCLE] All library backgrounds used once. Resetting pool.")
+                recent_bgs.clear()
+                selected_video = random.choice(videos)
+            elif all_fresh:
+                selected_video = random.choice(all_fresh)
+            else:
+                selected_video = random.choice(videos)
         
     # Ultra-Fast Duration Probe (OpenCV: ~2ms, zero ffmpeg overhead)
     try:
@@ -339,14 +442,26 @@ def get_quran_data(min_duration_sec=20, custom_surah=None, custom_ayah=None, rec
         print(f"   > 📡 Mode: Auto / Random (Groq Semantic Router + Smart Firewall Active)")
     
     while True: 
+        posted_verses = get_posted_verses()
         if custom_surah and custom_ayah:
             first_endpoint = f"{custom_surah}:{custom_ayah}"
             print(f"   > 🎯 Custom Request: Surah {custom_surah}, Ayah {custom_ayah}")
         elif topic_key and topic_key in TOPIC_VERSE_BANK:
-            first_endpoint = random.choice(TOPIC_VERSE_BANK[topic_key])
+            bank = TOPIC_VERSE_BANK[topic_key]
+            unposted = [ep for ep in bank if ep not in posted_verses]
+            if unposted:
+                first_endpoint = unposted[0]
+            else:
+                print(f"   > 🔄 [VERSE CYCLE] All verses in topic '{topic_key}' have been posted. Cycling back.")
+                first_endpoint = bank[0]
             print(f"   > 📖 Thematic Verse Target [{topic_key.upper()}]: Surah {first_endpoint}")
         else:
-            first_endpoint = str(random.randint(1, 6200))
+            candidate_num = random.randint(1, 6236)
+            attempts = 0
+            while (str(candidate_num) in posted_verses) and attempts < 100:
+                candidate_num = (candidate_num % 6236) + 1
+                attempts += 1
+            first_endpoint = str(candidate_num)
         
         def fetch_ayah(endpoint):
             fetch_reciter = "ar.husary" if reciter_code == "ar.yasseraddussary" else reciter_code
@@ -401,22 +516,24 @@ def get_quran_data(min_duration_sec=20, custom_surah=None, custom_ayah=None, rec
         if not video_path:
             continue
 
-        # 🌟 NEW SMART DURATION RULES (STRICTLY > 20s FINAL VIDEO)
+        # 🌟 STRICT 54.0s LOOKAHEAD FIREWALL CEILING (Zero Trimming, Natural Waqf Pause Intact)
+        MAX_TARGET = 54.0
+
         if video_duration < 10.0:
             # Micro videos loop up to 5 times (or up to 32s) to safely clear the 20s minimum
-            max_allowed_duration = min(max(video_duration * 5.0, 32.0), 55.0) 
+            max_allowed_duration = min(max(video_duration * 5.0, 32.0), MAX_TARGET) 
             min_required_duration = 20.0
             print(f"   > 🎞️ Micro video ({video_duration:.1f}s). Max: {max_allowed_duration:.1f}s | Min required: 20.0s.")
             
         elif 10.0 <= video_duration <= 25.0:
             # Short videos loop up to 2.5 times (or up to 36s) to safely clear the 20s minimum
-            max_allowed_duration = min(max(video_duration * 2.5, 36.0), 55.0)
+            max_allowed_duration = min(max(video_duration * 2.5, 36.0), MAX_TARGET)
             min_required_duration = 20.0
             print(f"   > 🎞️ Short video ({video_duration:.1f}s). Max: {max_allowed_duration:.1f}s | Min required: 20.0s.")
             
         else:
             # Videos > 25s are strictly blocked from looping. 
-            max_allowed_duration = min(video_duration, 55.0)
+            max_allowed_duration = min(video_duration, MAX_TARGET)
             # Require the audio to fill most of the video, but never drop below 20s
             min_required_duration = max(20.0, max_allowed_duration - 8.0) 
             print(f"   > 🎞️ Long video ({video_duration:.1f}s). No looping. Max: {max_allowed_duration:.1f}s | Min required: {min_required_duration:.1f}s.")
@@ -425,11 +542,11 @@ def get_quran_data(min_duration_sec=20, custom_surah=None, custom_ayah=None, rec
 
         if first_dur > max_allowed_duration:
             if custom_surah and custom_ayah:
-                if first_dur <= 55.0:
-                    max_allowed_duration = min(55.0, first_dur + 3.0)
+                if first_dur <= MAX_TARGET:
+                    max_allowed_duration = min(MAX_TARGET, first_dur + 3.0)
                     print(f"   > 🎯 Custom Verse Override: Adjusted timeline to {max_allowed_duration:.1f}s to fit custom verse (~{first_dur:.1f}s).")
                 else:
-                    print(f"   > 🛑 Custom verse duration (~{first_dur:.1f}s) exceeds 55.0s reel ceiling. Surah {custom_surah}:{custom_ayah} is too long for a short. Halting.")
+                    print(f"   > 🛑 Custom verse duration (~{first_dur:.1f}s) exceeds {MAX_TARGET:.1f}s reel ceiling. Surah {custom_surah}:{custom_ayah} is too long for a short. Halting.")
                     return None
             else:
                 print(f"   > 🛑 FIREWALL HIT: First verse (~{first_dur:.1f}s) exceeds max limit ({max_allowed_duration:.1f}s). Dropping...")
@@ -448,8 +565,10 @@ def get_quran_data(min_duration_sec=20, custom_surah=None, custom_ayah=None, rec
                 
             next_dur = estimate_duration(next_verse)
             
-            if (total_estimated_duration + next_dur) > max_allowed_duration:
-                print(f"   > ✂️ Limit Reached! Next verse pushes past {max_allowed_duration:.1f}s. Dropping it and finishing sequence.")
+            # 🌟 STRICT 54.0s LOOKAHEAD FIREWALL GUARD: Zero mid-verse cutoffs.
+            # Never start next Ayah if it pushes total past MAX_TARGET.
+            if (total_estimated_duration + next_dur) > min(max_allowed_duration, MAX_TARGET):
+                print(f"   > 🛡️ 54s Lookahead Firewall: Next Ayah (~{next_dur:.1f}s) pushes total past {MAX_TARGET:.1f}s. Ending sequence cleanly at Ayah {verses_data[-1]['ayah_num']} with complete Waqf.")
                 break
                 
             verses_data.append(next_verse)
@@ -462,6 +581,7 @@ def get_quran_data(min_duration_sec=20, custom_surah=None, custom_ayah=None, rec
             
         print(f"   > ✅ Locked in {len(verses_data)} verses. Total estimated audio: ~{total_estimated_duration:.1f}s.")
         record_used_bg(video_path)
+        record_posted_verses(verses_data)
         break 
 
     return {
