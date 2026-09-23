@@ -58,6 +58,12 @@ def build_caption(quran_data, cta_text="", reciter_name=""):
     if not isinstance(quran_data, dict):
         quran_data = {}
 
+    if quran_data.get("is_repurposed") or quran_data.get("caption"):
+        caption = quran_data.get("caption") or quran_data.get("title", "")
+        if cta_text and cta_text not in caption:
+            caption += f"\n\n👇 {cta_text}"
+        return caption
+
     verses = quran_data.get('verses', [])
     if verses and isinstance(verses, list):
         urdu = "\n".join([v.get('urdu', '') for v in verses if isinstance(v, dict) and v.get('urdu')])
@@ -632,11 +638,25 @@ def upload_to_youtube(video_path, title, description, token_path, thumbnail_path
             print("   > 🔄 ACTION REQUIRED: Please click 'Manual Upload' again. The browser WILL open this time!")
             return 
 
+        # Guarantee YouTube Shorts Routing via #Shorts in Title and Description
+        clean_title = (title or "Viral Video").strip()
+        if "#Shorts" not in clean_title and "#shorts" not in clean_title:
+            # YouTube titles have a 100 character limit. Trim to 91 chars to fit " #Shorts"
+            title = f"{clean_title[:91].strip()} #Shorts"
+        else:
+            title = clean_title[:100]
+
+        clean_desc = (description or "").strip()
+        if "#Shorts" not in clean_desc and "#shorts" not in clean_desc:
+            description = f"#Shorts #Viral #Reels\n\n{clean_desc}"
+        else:
+            description = clean_desc
+
         body = {
             'snippet': {
                 'title': title,
                 'description': description,
-                'tags': ['Quran', 'IslamicReels', 'Shorts', 'Allah', 'Deen'],
+                'tags': ['Shorts', 'shorts', 'Short', 'viral', 'reels', 'tiktok', 'Islamic', 'Quran', 'Trending'],
                 'categoryId': '22'
             },
             'status': {'privacyStatus': 'public', 'selfDeclaredMadeForKids': False}
@@ -716,16 +736,20 @@ def run_all_uploads(video_path, quran_data, settings, abort_check=None, thumbnai
 
     # Staging Engine for Cover Photo / Thumbnail
     local_thumb_file = None
-    if thumbnail_path and os.path.exists(thumbnail_path):
-        local_thumb_file = thumbnail_path
-    else:
-        thumb_folder = os.path.join(install_dir, "reciter_photos")
-        if os.path.exists(thumb_folder):
-            import glob, random
-            photos = glob.glob(os.path.join(thumb_folder, "*.jpg")) + glob.glob(os.path.join(thumb_folder, "*.png"))
-            if photos:
-                local_thumb_file = random.choice(photos)
-                print(f"   > 🖼️ Auto-selected cover photo from reciter_photos: {os.path.basename(local_thumb_file)}")
+    is_repurposed = bool(quran_data.get("is_repurposed", False))
+
+    # Strictly do NOT use reciter cover photos for repurposed videos (prevents thumbnail distortion & Shorts breaking)
+    if not is_repurposed:
+        if thumbnail_path and os.path.exists(thumbnail_path):
+            local_thumb_file = thumbnail_path
+        else:
+            thumb_folder = os.path.join(install_dir, "reciter_photos")
+            if os.path.exists(thumb_folder):
+                import glob, random
+                photos = glob.glob(os.path.join(thumb_folder, "*.jpg")) + glob.glob(os.path.join(thumb_folder, "*.png"))
+                if photos:
+                    local_thumb_file = random.choice(photos)
+                    print(f"   > 🖼️ Auto-selected cover photo from reciter_photos: {os.path.basename(local_thumb_file)}")
 
     thumb_url = None
     if local_thumb_file and os.path.exists(local_thumb_file):
@@ -753,16 +777,26 @@ def run_all_uploads(video_path, quran_data, settings, abort_check=None, thumbnai
         if not global_enable_ig:
             print("   > ⏭️ Skipping Instagram (Turned off in settings)")
 
-    # 3. YouTube
+    # 3. YouTube (Routed to YouTube Shorts Shelf)
     if abort_check and not abort_check(): return
     if settings.get("enable_yt", True):
-        clean_yt_ref = quran_data['reference'].split("| [BG:")[0].strip()
-        yt_title = f"Beautiful Quran Recitation - {clean_yt_ref} ✨"
+        if is_repurposed or quran_data.get("title"):
+            clean_title = (quran_data.get("title") or "Viral Short").strip()
+            if "#Shorts" not in clean_title and "#shorts" not in clean_title:
+                yt_title = f"{clean_title[:88].strip()} #Shorts"
+            else:
+                yt_title = clean_title[:95]
+        else:
+            clean_yt_ref = quran_data.get('reference', 'Quran Recitation').split("| [BG:")[0].strip()
+            yt_title = f"Beautiful Quran Recitation - {clean_yt_ref} #Shorts ✨"
         
         current_profile = settings.get("current_profile_name", "Main Page")
         profile_yt_token = os.path.join(install_dir, "credentials", current_profile, "token.json")
         
-        upload_to_youtube(video_path, yt_title, caption, profile_yt_token, thumbnail_path=local_thumb_file)
+        # NEVER pass custom thumbnails to YouTube for repurposed videos!
+        # Custom thumbnails force YouTube to place videos in the standard 'Videos' tab rather than 'Shorts'.
+        yt_thumbnail = None if is_repurposed else local_thumb_file
+        upload_to_youtube(video_path, yt_title, caption, profile_yt_token, thumbnail_path=yt_thumbnail)
     else:
         if not global_enable_yt:
             print("   > ⏭️ Skipping YouTube (Turned off in settings)")

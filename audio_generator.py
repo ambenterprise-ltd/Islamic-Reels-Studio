@@ -206,7 +206,8 @@ def prepare_audio_timeline(verses_data, mode, acoustic_profile="Default (Raw Aud
     print(f"\n   > ⚙️ Building Audio Timeline & Enforcing 55s True Limit...")
     sequence = []
     
-    MAX_TRUE_DURATION = 55.0
+    MAX_TARGET = 54.0
+    MAX_TRUE_DURATION = MAX_TARGET
     current_total_duration = 0.0
     
     for idx, verse in enumerate(verses_data):
@@ -247,8 +248,9 @@ def prepare_audio_timeline(verses_data, mode, acoustic_profile="Default (Raw Aud
             print("   > ❌ Corrupt audio downloaded. Skipping verse.")
             continue
             
-        if current_total_duration + exact_clip_duration > MAX_TRUE_DURATION:
-            print(f"   > 🛑 55-SECOND FIREWALL HIT! (Rejecting Ayah {verse['ayah_num']}). Video safely capped at {current_total_duration:.1f}s")
+        # 🌟 STRICT 54.0s LOOKAHEAD FIREWALL GUARD (Zero Mid-Verse Cuts)
+        if current_total_duration + exact_clip_duration > MAX_TARGET:
+            print(f"   > 🛡️ 54-SECOND LOOKAHEAD FIREWALL! (Rejecting Ayah {verse['ayah_num']}). Video safely finalized at {current_total_duration:.1f}s with completed Ayah and natural Waqf intact.")
             if os.path.exists(main_audio_path): os.remove(main_audio_path)
             break 
             
@@ -264,7 +266,7 @@ def prepare_audio_timeline(verses_data, mode, acoustic_profile="Default (Raw Aud
 
         current_total_duration += exact_clip_duration
         sequence.append(entry)
-        print(f"   > ✅ Added Ayah {verse['ayah_num']} (Video is now {current_total_duration:.1f}s / {MAX_TRUE_DURATION}s)")
+        print(f"   > ✅ Added Ayah {verse['ayah_num']} (Video is now {current_total_duration:.1f}s / {MAX_TARGET}s)")
             
     try:
         import hardware_optimizer

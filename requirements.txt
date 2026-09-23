@@ -1,0 +1,30 @@
+# GUI & Visuals
+customtkinter>=5.2.0
+pystray>=0.19.5
+Pillow>=10.0.0
+
+# Video & Media Processing
+moviepy==1.0.3
+opencv-python>=4.8.0
+html2image>=2.0.4
+yt-dlp>=2024.8.0
+curl-cffi>=0.7.0
+
+# Audio Engine & AI Synchronization
+edge-tts>=6.1.0
+faster-whisper>=1.0.0
+pedalboard>=0.8.0
+
+# Cloud APIs & Remote Management
+requests>=2.31.0
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
+gspread>=6.0.0
+oauth2client>=4.1.3
+discord.py>=2.3.0
+
+# Hardware & System Utilities
+psutil>=5.9.0
+proglog>=0.1.10
+numpy>=1.24.0,<2.0.0
