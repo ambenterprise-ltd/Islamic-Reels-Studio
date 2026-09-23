@@ -14,7 +14,12 @@ if sys.platform.startswith('win'):
         try: sys.stderr.reconfigure(encoding='utf-8')
         except Exception: pass
 
-import yt_dlp
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
+    print("   > ❌ Missing Dependency: 'yt-dlp' is not installed.")
+    print("   > 💡 Please install it via: pip install yt-dlp")
 
 if sys.platform == "win32":
     app_data_root = os.environ.get('APPDATA', os.path.expanduser('~'))
@@ -29,6 +34,8 @@ os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
 
 def _get_impersonate_target():
     """Attempts to configure Chrome TLS impersonation for yt-dlp to bypass TikTok anti-bot shields."""
+    if yt_dlp is None:
+        return None
     try:
         from yt_dlp.networking.impersonate import ImpersonateTarget
         return ImpersonateTarget.from_str('chrome')
@@ -168,6 +175,11 @@ def fetch_top_tiktok_video(username, sort_by="Most Viewed (Viral)", min_views=10
     """
     if not username or not username.strip():
         print("   > ❌ TikTok Scraper Error: Target username is empty.")
+        return None
+
+    if yt_dlp is None:
+        print("   > ❌ TikTok Scraper Error: 'yt-dlp' is required for TikTok Repurposer mode.")
+        print("   > 💡 Please install it via: pip install yt-dlp")
         return None
 
     target_url = normalize_tiktok_url(username)

@@ -101,17 +101,45 @@ def _parse_timestamp_str(ts_str):
     return None
 
 
-def get_gspread_client(creds_path=None):
+def get_sheets_secret_path(profile_name=None):
+    """
+    Resilient Google Sheets credentials resolver.
+    Searches profile-specific paths, then falls back to Main Page backup,
+    root credentials directory, and CWD.
+    """
+    candidates = []
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    if profile_name:
+        clean_prof = str(profile_name).strip()
+        candidates.append(os.path.join("credentials", clean_prof, "sheets_secret.json"))
+        candidates.append(os.path.join(base_dir, "credentials", clean_prof, "sheets_secret.json"))
+    candidates.extend([
+        os.path.join("credentials", "Main Page", "sheets_secret.json"),
+        os.path.join(base_dir, "credentials", "Main Page", "sheets_secret.json"),
+        os.path.join("credentials", "sheets_secret.json"),
+        os.path.join(base_dir, "credentials", "sheets_secret.json"),
+        "sheets_secret.json",
+        os.path.join(base_dir, "sheets_secret.json")
+    ])
+    for path in candidates:
+        if path and os.path.exists(path):
+            return os.path.abspath(path)
+    raise FileNotFoundError(f"Google Sheets secret JSON not found in candidates: {candidates}")
+
+
+def get_gspread_client(creds_path=None, profile_name=None):
     """Authorizes and returns a gspread Client instance using service account JSON."""
-    if not creds_path:
-        creds_path = 'sheets_secret.json'
-    if not os.path.exists(creds_path):
-        # Look in workspace credentials folders
-        alt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), creds_path)
-        if os.path.exists(alt_path):
-            creds_path = alt_path
-        else:
-            raise FileNotFoundError(f"Google Sheets Service JSON missing at: {creds_path}")
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path(profile_name)
+        except Exception as e:
+            if not creds_path:
+                raise e
+            alt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), creds_path)
+            if os.path.exists(alt_path):
+                creds_path = alt_path
+            else:
+                raise e
 
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets',
@@ -133,13 +161,19 @@ def _open_spreadsheet_safe(client, sheet_url_or_key):
     return client.open_by_key(sheet_str)
 
 
-def get_spreadsheet(sheet_url, creds_path=None):
+def get_spreadsheet(sheet_url, creds_path=None, profile_name=None):
     """
     Returns a cached gspread Spreadsheet instance with thread-safe locking and TTL.
     """
     if not sheet_url or "YOUR_" in sheet_url:
         print("   > ❌ Sheets Error: The Google Sheet URL/Key is empty or invalid.")
         return None
+
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path(profile_name)
+        except Exception:
+            pass
 
     cache_key = (sheet_url.strip(), creds_path or 'default')
     now = time.time()
@@ -150,7 +184,7 @@ def get_spreadsheet(sheet_url, creds_path=None):
             return cached["doc"]
 
     try:
-        client = get_gspread_client(creds_path)
+        client = get_gspread_client(creds_path, profile_name=profile_name)
         doc = _open_spreadsheet_safe(client, sheet_url)
         with _CACHE_LOCK:
             _SPREADSHEET_CACHE[cache_key] = {
@@ -173,7 +207,14 @@ def get_or_create_profile_worksheet(sheet_url, profile_name, creds_path=None):
     `ws = spreadsheet.add_worksheet(title=profile_name, rows=500, cols=10)`.
     Adds default header columns if new or empty.
     """
-    spreadsheet = get_spreadsheet(sheet_url, creds_path)
+    clean_profile = str(profile_name).strip() or "Main Page"
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path(clean_profile)
+        except Exception:
+            pass
+
+    spreadsheet = get_spreadsheet(sheet_url, creds_path, profile_name=clean_profile)
     if not spreadsheet:
         return None
 
@@ -249,11 +290,19 @@ def get_last_post_timestamp(profile_name, sheet_url=None, creds_path=None):
     - If sheet is new/empty, returns None.
     - On API error, returns 'API_ERROR'.
     """
+    clean_profile = str(profile_name).strip() or "Main Page"
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path(clean_profile)
+        except Exception:
+            pass
+
     if not sheet_url:
         sheet_url = "https://docs.google.com/spreadsheets/d/1Q5E6w4PkKR6vS__Fd8Go6rHBIG0nsKdeuly6lHTPVGE/edit?gid=0#gid=0"
 
-    cache_key = (sheet_url.strip(), str(profile_name).strip())
+    cache_key = (sheet_url.strip(), clean_profile)
     now_ts = time.time()
+    now_dt = datetime.now()
 
     # In-memory rate-limit cache (60-second validity)
     with _CACHE_LOCK:
@@ -261,12 +310,16 @@ def get_last_post_timestamp(profile_name, sheet_url=None, creds_path=None):
         if cached and (now_ts - cached["checked_at"] < 60):
             cached_dt = cached.get("last_post_time")
             if cached_dt:
-                elapsed = datetime.now() - cached_dt
+                if cached_dt > now_dt:
+                    cached_dt = now_dt
+                    elapsed = timedelta(0)
+                else:
+                    elapsed = now_dt - cached_dt
                 return PostElapsed(days=elapsed.days, seconds=elapsed.seconds, microseconds=elapsed.microseconds, last_post_time=cached_dt)
             return None
 
     try:
-        ws = get_or_create_profile_worksheet(sheet_url, profile_name, creds_path=creds_path)
+        ws = get_or_create_profile_worksheet(sheet_url, clean_profile, creds_path=creds_path)
         if not ws:
             return "API_ERROR"
 
@@ -292,9 +345,13 @@ def get_last_post_timestamp(profile_name, sheet_url=None, creds_path=None):
             if len(row) > ts_col and row[ts_col].strip():
                 parsed_dt = _parse_timestamp_str(row[ts_col].strip())
                 if parsed_dt:
+                    if parsed_dt > now_dt:
+                        parsed_dt = now_dt
+                        elapsed = timedelta(0)
+                    else:
+                        elapsed = now_dt - parsed_dt
                     with _CACHE_LOCK:
                         _LAST_POST_CACHE[cache_key] = {"last_post_time": parsed_dt, "checked_at": now_ts}
-                    elapsed = datetime.now() - parsed_dt
                     return PostElapsed(days=elapsed.days, seconds=elapsed.seconds, microseconds=elapsed.microseconds, last_post_time=parsed_dt)
 
         with _CACHE_LOCK:
@@ -302,7 +359,7 @@ def get_last_post_timestamp(profile_name, sheet_url=None, creds_path=None):
         return None
 
     except Exception as e:
-        print(f"   > ❌ Sheets Read Error for [{profile_name}]: {e}")
+        print(f"   > ❌ Sheets Read Error for [{clean_profile}]: {e}")
         return "API_ERROR"
 
 
@@ -351,6 +408,12 @@ def log_post(sheet_url, profile_name, verse_target="Quran Recitation", topic_tar
         profile_name = p_name
 
     clean_profile = str(profile_name).strip() or "Main Page"
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path(clean_profile)
+        except Exception:
+            pass
+
     ws = get_or_create_profile_worksheet(sheet_url, clean_profile, creds_path=creds_path)
     if not ws:
         print(f"   > ❌ Sheets Error: Could not access worksheet tab for profile '{clean_profile}'.")
@@ -365,6 +428,8 @@ def log_post(sheet_url, profile_name, verse_target="Quran Recitation", topic_tar
         if last_info and last_info != "API_ERROR":
             last_dt = getattr(last_info, "last_post_time", None)
             if last_dt:
+                if last_dt > now:
+                    last_dt = now
                 elapsed_minutes = max(0, int((now - last_dt).total_seconds() / 60))
     except Exception:
         pass
@@ -400,6 +465,11 @@ def log_post(sheet_url, profile_name, verse_target="Quran Recitation", topic_tar
 
 def get_sheet(sheet_url, creds_path=None):
     """Backward-compatible helper returning sheet1 of the spreadsheet."""
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path("Main Page")
+        except Exception:
+            pass
     doc = get_spreadsheet(sheet_url, creds_path)
     if doc:
         return doc.sheet1
@@ -410,6 +480,11 @@ def get_sheet(sheet_url, creds_path=None):
 def push_settings_to_cloud(sheet_url, settings_dict, creds_path=None):
     """Backs up entire settings configuration to a dedicated 'Agency_Profile' worksheet tab."""
     print("   > ☁️ Pushing Agency Profile to Google Sheets...")
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path("Main Page")
+        except Exception:
+            pass
     spreadsheet = get_spreadsheet(sheet_url, creds_path)
     if not spreadsheet:
         return False
@@ -443,6 +518,11 @@ def push_settings_to_cloud(sheet_url, settings_dict, creds_path=None):
 def pull_settings_from_cloud(sheet_url, creds_path=None):
     """Restores entire settings configuration from the 'Agency_Profile' worksheet tab."""
     print("   > ☁️ Pulling Agency Profile from Google Sheets...")
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path("Main Page")
+        except Exception:
+            pass
     spreadsheet = get_spreadsheet(sheet_url, creds_path)
     if not spreadsheet:
         return None
@@ -463,6 +543,11 @@ def pull_settings_from_cloud(sheet_url, creds_path=None):
 def sync_lf_timestamp(sheet_url, timestamp_str, creds_path=None):
     """Syncs long-form timestamp to 'Long-Form Logs' worksheet tab."""
     print("   > ☁️ Syncing Long-Form timestamp to Google Sheets...")
+    if not creds_path or not os.path.exists(creds_path):
+        try:
+            creds_path = get_sheets_secret_path("Main Page")
+        except Exception:
+            pass
     spreadsheet = get_spreadsheet(sheet_url, creds_path)
     if not spreadsheet:
         return False

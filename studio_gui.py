@@ -88,10 +88,7 @@ import gc
 import subprocess
 
 if sys.platform == "win32":
-    try:
-        import winreg
-    except Exception:
-        winreg = None
+    import winreg
 else:
     winreg = None
 
@@ -124,6 +121,31 @@ creds_vault_dir = os.path.join(install_dir, 'credentials')
 
 os.makedirs(app_data_dir, exist_ok=True)
 os.makedirs(creds_vault_dir, exist_ok=True)
+
+def get_sheets_secret_path(profile_name=None):
+    """
+    Centralized resilient Google Sheets credentials resolver.
+    Searches profile-specific paths, then falls back to Main Page backup,
+    root credentials directory, and CWD.
+    """
+    try:
+        return cloud_logger.get_sheets_secret_path(profile_name)
+    except Exception:
+        candidates = []
+        if profile_name:
+            candidates.append(os.path.join(creds_vault_dir, profile_name, "sheets_secret.json"))
+            candidates.append(os.path.join("credentials", profile_name, "sheets_secret.json"))
+        candidates.extend([
+            os.path.join(creds_vault_dir, "Main Page", "sheets_secret.json"),
+            os.path.join("credentials", "Main Page", "sheets_secret.json"),
+            os.path.join(creds_vault_dir, "sheets_secret.json"),
+            os.path.join("credentials", "sheets_secret.json"),
+            "sheets_secret.json"
+        ])
+        for path in candidates:
+            if path and os.path.exists(path):
+                return path
+        raise FileNotFoundError(f"Google Sheets secret JSON not found in candidates: {candidates}")
 
 os.chdir(app_data_dir)
 
@@ -542,15 +564,25 @@ class IslamicReelsStudio(ctk.CTk):
         os.makedirs(os.path.join(creds_vault_dir, profile_name), exist_ok=True)
         prof_dir = os.path.join(creds_vault_dir, profile_name)
         
-        for file in ["client_secret.json", "sheets_secret.json"]:
-            src = os.path.join(prof_dir, file)
-            dst = os.path.join(app_data_dir, file) 
-            if os.path.exists(src):
-                shutil.copy2(src, dst)
-            else:
-                if os.path.exists(dst):
-                    try: os.remove(dst)
-                    except: pass
+        # Staging YouTube client_secret.json
+        client_src = os.path.join(prof_dir, "client_secret.json")
+        client_dst = os.path.join(app_data_dir, "client_secret.json")
+        if os.path.exists(client_src):
+            shutil.copy2(client_src, client_dst)
+        elif os.path.exists(client_dst):
+            try: os.remove(client_dst)
+            except Exception: pass
+
+        # Staging sheets_secret.json via resilient resolver (falls back to Main Page backup)
+        sheets_dst = os.path.join(app_data_dir, "sheets_secret.json")
+        try:
+            resolved_sheets = get_sheets_secret_path(profile_name)
+            if resolved_sheets and os.path.exists(resolved_sheets):
+                shutil.copy2(resolved_sheets, sheets_dst)
+        except Exception:
+            if os.path.exists(sheets_dst):
+                try: os.remove(sheets_dst)
+                except Exception: pass
 
     def cleanup_root_clutter(self):
         """Cleans up debug/temporary files in the root directory (recovered_*, *.mp3, *.srt)"""
@@ -671,9 +703,10 @@ class IslamicReelsStudio(ctk.CTk):
     def get_last_post_timestamp(self, profile_name):
         """Queries cloud_logger for the specified profile's tab in the shared Google Sheet."""
         shared_url = self.get_shared_sheet_url(profile_name)
-        profile_creds = os.path.join(creds_vault_dir, profile_name, "sheets_secret.json")
-        if not os.path.exists(profile_creds):
-            profile_creds = "sheets_secret.json"
+        try:
+            profile_creds = get_sheets_secret_path(profile_name)
+        except Exception:
+            profile_creds = None
         return cloud_logger.get_last_post_timestamp(profile_name, sheet_url=shared_url, creds_path=profile_creds)
 
     def populate_main_ui(self):
@@ -744,12 +777,15 @@ class IslamicReelsStudio(ctk.CTk):
 
                     if last_time:
                         safe_last_time = last_time.replace(tzinfo=None) if last_time.tzinfo else last_time
-                        delta = datetime.now() - safe_last_time
+                        now_dt = datetime.now()
+                        if safe_last_time > now_dt:
+                            safe_last_time = now_dt
+                        delta = now_dt - safe_last_time
                         delta_hrs = delta.total_seconds() / 3600
                         if delta_hrs >= interval_hrs:
                             timer_lines.append(f"✅ {prof_name}: READY TO POST")
                         else:
-                            mins_left = max(0, (interval_hrs - delta_hrs) * 60)
+                            mins_left = max(0, min((interval_hrs - delta_hrs) * 60, interval_hrs * 60))
                             hrs = int(mins_left // 60)
                             mns = int(mins_left % 60)
                             timer_lines.append(f"⏳ {prof_name}: Next post in {hrs}h {mns}m")
@@ -847,10 +883,11 @@ class IslamicReelsStudio(ctk.CTk):
             
         try:
             status = social_engine.check_server_status(self.master_settings[self.active_profile])
-            sheet_url = self.get_shared_sheet_url(self.active_profile) 
-            profile_creds = os.path.join(creds_vault_dir, self.active_profile, "sheets_secret.json")
-            if not os.path.exists(profile_creds):
-                profile_creds = "sheets_secret.json"
+            sheet_url = self.get_shared_sheet_url(self.active_profile)
+            try:
+                profile_creds = get_sheets_secret_path(self.active_profile)
+            except Exception:
+                profile_creds = None
             self.last_time = cloud_logger.get_last_post_time(sheet_url, profile_name=self.active_profile, creds_path=profile_creds)
         except Exception:
             status = {"meta_time": "Error", "facebook": "Network Error", "youtube": "Network Error"}
@@ -1299,7 +1336,10 @@ class IslamicReelsStudio(ctk.CTk):
         sh_row.pack(fill="x", pady=8)
         ctk.CTkLabel(sh_row, text="Service JSON File:", width=130, anchor="w", text_color=TEXT_WHITE).pack(side="left")
         
-        prof_sheet_path = os.path.join(creds_vault_dir, self.active_profile, "sheets_secret.json")
+        try:
+            prof_sheet_path = get_sheets_secret_path(self.active_profile)
+        except Exception:
+            prof_sheet_path = os.path.join(creds_vault_dir, self.active_profile, "sheets_secret.json")
         sh_status = "✅ Active" if os.path.exists(prof_sheet_path) else "❌ Missing"
         sh_color = "#27AE60" if os.path.exists(prof_sheet_path) else "#E74C3C"
         sh_status_label = ctk.CTkLabel(sh_row, text=sh_status, text_color=sh_color, font=ctk.CTkFont(weight="bold"))
@@ -2406,9 +2446,10 @@ class IslamicReelsStudio(ctk.CTk):
                     
                 if self.get_active_setting("enable_sheet_logs", True):
                     shared_url = self.get_shared_sheet_url(self.active_profile)
-                    profile_creds = os.path.join(creds_vault_dir, self.active_profile, "sheets_secret.json")
-                    if not os.path.exists(profile_creds):
-                        profile_creds = "sheets_secret.json"
+                    try:
+                        profile_creds = get_sheets_secret_path(self.active_profile)
+                    except Exception:
+                        profile_creds = None
 
                     verse_target = post_data.get("verse_target", "Quran Recitation") if isinstance(post_data, dict) else str(post_data)
                     topic_target = post_data.get("topic_target", "Islamic Reel") if isinstance(post_data, dict) else "Islamic Reel"
@@ -2485,6 +2526,16 @@ class IslamicReelsStudio(ctk.CTk):
                             should_post = True
                         else:
                             safe_last_time = last_post_time.replace(tzinfo=None) if last_post_time.tzinfo else last_post_time
+
+                            # 🛡️ TIMEZONE / FUTURE TIMESTAMP GUARD:
+                            # If last recorded post timestamp is in the future (due to timezone differences or corrupted timestamps),
+                            # reset or bound the deferral rather than freezing the queue for 12 hours.
+                            if safe_last_time > now:
+                                skew_mins = (safe_last_time - now).total_seconds() / 60
+                                print(f"   > ⚠️ Notice [{prof_name}]: Future timestamp detected ({safe_last_time}, +{skew_mins:.1f}m ahead of local time).")
+                                print(f"   > 🛡️ Resetting forward timestamp to current local time to prevent queue lockout.")
+                                safe_last_time = now
+
                             elapsed = now - safe_last_time
                             if elapsed >= interval_delta:
                                 delta_hrs = elapsed.total_seconds() / 3600
@@ -2492,6 +2543,9 @@ class IslamicReelsStudio(ctk.CTk):
                                 should_post = True
                             else:
                                 remaining = interval_delta - elapsed
+                                # Strictly bound deferral: remaining time cannot exceed configured interval_delta
+                                if remaining > interval_delta:
+                                    remaining = interval_delta
                                 rem_mins = max(0, int(remaining.total_seconds() / 60))
                                 rem_hrs = rem_mins // 60
                                 rem_mins_rem = rem_mins % 60
@@ -2520,9 +2574,10 @@ class IslamicReelsStudio(ctk.CTk):
                                     self.stage_credentials(prof_name)
                                     
                                 if settings.get("enable_sheet_logs", True):
-                                    profile_creds = os.path.join(creds_vault_dir, prof_name, "sheets_secret.json")
-                                    if not os.path.exists(profile_creds):
-                                        profile_creds = "sheets_secret.json"
+                                    try:
+                                        profile_creds = get_sheets_secret_path(prof_name)
+                                    except Exception:
+                                        profile_creds = None
 
                                     verse_target = post_data.get("verse_target", "Quran Recitation") if isinstance(post_data, dict) else str(post_data)
                                     topic_target = post_data.get("topic_target", "Islamic Reel") if isinstance(post_data, dict) else "Islamic Reel"

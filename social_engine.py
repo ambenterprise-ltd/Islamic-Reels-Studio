@@ -38,6 +38,31 @@ def get_meta_server_time():
     except:
         return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'), int(time.time())
 
+def get_sheets_secret_path(profile_name=None):
+    """
+    Centralized resilient Google Sheets secret JSON resolver.
+    Falls back to 'Main Page' backup, root credentials, or cwd.
+    """
+    candidates = []
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    if profile_name:
+        clean_prof = str(profile_name).strip()
+        candidates.append(os.path.join("credentials", clean_prof, "sheets_secret.json"))
+        candidates.append(os.path.join(base_dir, "credentials", clean_prof, "sheets_secret.json"))
+    candidates.extend([
+        os.path.join("credentials", "Main Page", "sheets_secret.json"),
+        os.path.join(base_dir, "credentials", "Main Page", "sheets_secret.json"),
+        os.path.join("credentials", "sheets_secret.json"),
+        os.path.join(base_dir, "credentials", "sheets_secret.json"),
+        "sheets_secret.json",
+        os.path.join(base_dir, "sheets_secret.json")
+    ])
+    for path in candidates:
+        if path and os.path.exists(path):
+            return os.path.abspath(path)
+    raise FileNotFoundError(f"Google Sheets secret JSON not found in candidates: {candidates}")
+
+
 def check_server_status(settings):
     statuses = {
         "meta_time": get_meta_server_time()[0],
