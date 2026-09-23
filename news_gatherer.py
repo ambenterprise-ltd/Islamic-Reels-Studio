@@ -4,7 +4,7 @@ import os
 import glob
 import sys
 import json
-from moviepy.editor import VideoFileClip
+# MoviePy VideoFileClip is imported lazily inside get_video_and_duration only if needed
 
 if getattr(sys, 'frozen', False):
     base_dir = os.path.dirname(sys.executable)
@@ -188,6 +188,12 @@ def get_video_and_duration(selection):
     }
     
     search_folders = [
+        # Direct bg folder (support both "bg" and "backgrounds")
+        os.path.join("bg", "wealth"),
+        os.path.join("bg", "Emotional"),
+        os.path.join("bg", "nature"),
+        os.path.join("bg", "asthatic"),
+        "bg",
         # Combined backgrounds directory (primary)
         os.path.join("backgrounds", "wealth"),
         os.path.join("backgrounds", "Emotional"),
@@ -220,9 +226,10 @@ def get_video_and_duration(selection):
                     if os.path.exists(candidate) and candidate not in candidates:
                         candidates.append(candidate)
                         
-            # Recursive scan inside backgrounds/ and new/ if not found in defined search folders
+            # Recursive scan inside bg/, backgrounds/, and new/ if not found in defined search folders
             if not candidates:
-                for root_dir in [os.path.join(base_dir, "backgrounds"), os.path.join(base_dir, "new")]:
+                for root_name in ["bg", "backgrounds", "new"]:
+                    root_dir = os.path.join(base_dir, root_name)
                     if os.path.exists(root_dir):
                         for target_name in search_names:
                             for found in glob.glob(os.path.join(root_dir, "**", target_name), recursive=True):
@@ -240,6 +247,7 @@ def get_video_and_duration(selection):
         target_folders = []
         if selection_clean in ["nature", "Emotional", "asthatic", "wealth"]:
             target_folders = [
+                os.path.join("bg", selection_clean),
                 os.path.join("backgrounds", selection_clean),
                 os.path.join("backgrounds", "new", selection_clean),
                 os.path.join("new", selection_clean),
@@ -247,6 +255,7 @@ def get_video_and_duration(selection):
             ]
         else:
             target_folders = [
+                os.path.join("bg", "asthatic"),
                 os.path.join("backgrounds", "asthatic"),
                 os.path.join("backgrounds", "new", "asthatic"),
                 os.path.join("new", "asthatic"),
@@ -263,6 +272,8 @@ def get_video_and_duration(selection):
                         
         if not videos:
             fallback_dirs = [
+                os.path.join(base_dir, "bg"),
+                os.path.join(base_dir, "bg", "asthatic"),
                 os.path.join(base_dir, "backgrounds", "asthatic"),
                 os.path.join(base_dir, "backgrounds"),
                 os.path.join(base_dir, "new", "asthatic"),
@@ -270,15 +281,20 @@ def get_video_and_duration(selection):
             ]
             for fd in fallback_dirs:
                 if os.path.exists(fd) and os.path.isdir(fd):
-                    videos = glob.glob(os.path.join(fd, "*.mp4"))
+                    for f in glob.glob(os.path.join(fd, "*.mp4")):
+                        if f not in videos:
+                            videos.append(f)
                     if videos:
                         break
                         
         if not videos:
-            # Safety net: search all mp4s in backgrounds directory recursively
-            bg_dir = os.path.join(base_dir, "backgrounds")
-            if os.path.exists(bg_dir):
-                videos = glob.glob(os.path.join(bg_dir, "**", "*.mp4"), recursive=True)
+            # Safety net: search all mp4s in bg and backgrounds directories recursively
+            for root_name in ["bg", "backgrounds"]:
+                bg_dir = os.path.join(base_dir, root_name)
+                if os.path.exists(bg_dir):
+                    for f in glob.glob(os.path.join(bg_dir, "**", "*.mp4"), recursive=True):
+                        if f not in videos:
+                            videos.append(f)
                 
         if not videos:
             return None, 0.0
@@ -287,7 +303,23 @@ def get_video_and_duration(selection):
         pool = fresh_videos if fresh_videos else videos
         selected_video = random.choice(pool)
         
+    # Ultra-Fast Duration Probe (OpenCV: ~2ms, zero ffmpeg overhead)
     try:
+        import cv2
+        cap = cv2.VideoCapture(selected_video)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            cap.release()
+            if fps > 0 and frames > 0:
+                duration = frames / fps
+                return selected_video, duration
+    except Exception:
+        pass
+
+    # Failsafe fallback to MoviePy
+    try:
+        from moviepy.editor import VideoFileClip
         clip = VideoFileClip(selected_video)
         duration = clip.duration
         clip.close()

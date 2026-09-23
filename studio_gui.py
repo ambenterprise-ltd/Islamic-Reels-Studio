@@ -14,7 +14,41 @@ import video_composer
 import news_gatherer
 import social_engine
 import cloud_logger
+import environment_precheck
 import customtkinter as ctk
+
+# --- CUSTOMTKINTER SCROLLBAR BUG FIX ---
+# Prevents AttributeError: 'CTkScrollbar' object has no attribute '_motion_center_offset'
+try:
+    from customtkinter.windows.widgets.ctk_scrollbar import CTkScrollbar
+    
+    _orig_scrollbar_init = CTkScrollbar.__init__
+    def _safe_scrollbar_init(self, *args, **kwargs):
+        self._motion_center_offset = 0.0
+        _orig_scrollbar_init(self, *args, **kwargs)
+    CTkScrollbar.__init__ = _safe_scrollbar_init
+
+    def _safe_scrollbar_on_motion(self, event):
+        if not hasattr(self, "_motion_center_offset"):
+            self._motion_center_offset = 0.0
+        if self._orientation == "vertical":
+            value = self._reverse_widget_scaling(((event.y - self._border_spacing) / (self._current_height - 2 * self._border_spacing))) + self._motion_center_offset
+        else:
+            value = self._reverse_widget_scaling(((event.x - self._border_spacing) / (self._current_width - 2 * self._border_spacing))) + self._motion_center_offset
+
+        current_scrollbar_length = self._end_value - self._start_value
+        value = max(current_scrollbar_length / 2, min(value, 1 - (current_scrollbar_length / 2)))
+        self._start_value = value - (current_scrollbar_length / 2)
+        self._end_value = value + (current_scrollbar_length / 2)
+        self._draw()
+
+        if self._command is not None:
+            self._command('moveto', self._start_value)
+    CTkScrollbar._on_motion = _safe_scrollbar_on_motion
+except Exception:
+    pass
+# ---------------------------------------
+
 from tkinter import colorchooser, filedialog, messagebox, simpledialog
 import threading
 import socket
@@ -108,6 +142,13 @@ class RedirectText:
                 self.text_widget.insert("end", parts[-1])
             else:
                 self.text_widget.insert("end", string)
+            
+            # 🌟 150-Line Ring Buffer: Cap log history strictly to 150 lines to keep Tkinter RAM < 10MB
+            total_lines = int(self.text_widget.index("end-1c").split(".")[0])
+            if total_lines > 150:
+                excess = total_lines - 150
+                self.text_widget.delete("1.0", f"{excess + 1}.0")
+
             self.text_widget.see("end")
             self.text_widget.configure(state="disabled")
         except Exception:
@@ -123,11 +164,18 @@ class RedirectText:
 class IslamicReelsStudio(ctk.CTk):
     def __init__(self):
         super().__init__()
-        print("\n======================================================================")
-        print("⚠️ low physical RAM profile detected: EC2 performance optimizations enabled.")
-        print("======================================================================\n")
+        try:
+            import hardware_optimizer
+            print(hardware_optimizer.get_hardware_report())
+        except Exception as hw_err:
+            print(f"⚠️ Hardware optimizer report notice: {hw_err}")
         sys.stdout.flush()
         
+        try:
+            environment_precheck.run_environment_precheck(verbose=True)
+        except Exception as precheck_e:
+            print(f"⚠️ Notice: Rapid precheck encountered non-fatal exception: {precheck_e}")
+
         self.is_startup_launch = "--startup" in sys.argv
         
         self.title("Islamic Reels Studio - Agency Edition by AMB Enterprise")
@@ -582,54 +630,93 @@ class IslamicReelsStudio(ctk.CTk):
 
     def trigger_manual_upload(self):
         last_video_file = os.path.join(app_data_dir, f"last_rendered_video_{self.active_profile}.json")
+        generated_paths = {}
+        quran_data = getattr(self, 'last_quran_data', None)
+
         if os.path.exists(last_video_file):
             try:
                 with open(last_video_file, "r") as f:
-                    generated_paths = json.load(f)
-            except:
-                with open(last_video_file, "r") as f:
-                    path = f.read().strip()
-                generated_paths = {"ig": path, "yt": path}
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        if "generated_paths" in data:
+                            generated_paths = data.get("generated_paths", {})
+                            if not quran_data and "quran_data" in data:
+                                quran_data = data["quran_data"]
+                        else:
+                            generated_paths = data
+            except Exception as e:
+                print(f"   > ⚠️ Notice reading last_video_file: {e}")
 
-            if generated_paths and self.last_quran_data:
-                with self.creds_lock:
-                    self.stage_credentials(self.active_profile)
-                    prof_settings = self.master_settings[self.active_profile].copy()
-                    prof_settings["current_profile_name"] = self.active_profile
-                    
-                    def upload_thread():
-                        if 'ig' in generated_paths and os.path.exists(generated_paths['ig']):
-                            print(f"   > 📤 Pushing Instagram/FB variant...")
-                            temp_set_ig = prof_settings.copy()
-                            temp_set_ig['enable_yt'] = False
+        # Smart Auto-Scan Output Directory if paths are missing or broken
+        output_dir = os.path.join(app_data_dir, "output")
+        ig_dir = os.path.join(output_dir, "instagram")
+        yt_dir = os.path.join(output_dir, "youtube")
+
+        if 'ig' not in generated_paths or not os.path.exists(generated_paths.get('ig', '')):
+            if os.path.exists(ig_dir):
+                ig_files = [os.path.join(ig_dir, f) for f in os.listdir(ig_dir) if f.endswith(".mp4")]
+                if ig_files:
+                    ig_files.sort(key=os.path.getmtime, reverse=True)
+                    generated_paths['ig'] = ig_files[0]
+                    print(f"   > 🔍 Auto-detected existing Instagram Reel: {os.path.basename(ig_files[0])}")
+
+        if 'yt' not in generated_paths or not os.path.exists(generated_paths.get('yt', '')):
+            if os.path.exists(yt_dir):
+                yt_files = [os.path.join(yt_dir, f) for f in os.listdir(yt_dir) if f.endswith(".mp4")]
+                if yt_files:
+                    yt_files.sort(key=os.path.getmtime, reverse=True)
+                    generated_paths['yt'] = yt_files[0]
+                    print(f"   > 🔍 Auto-detected existing YouTube Reel: {os.path.basename(yt_files[0])}")
+
+        if not quran_data:
+            quran_data = {
+                "reference": f"Quran Recitation - {self.active_profile}",
+                "text": "Beautiful Quran Recitation",
+                "verses": [{"english": "Beautiful Quran Recitation", "urdu": "قرآن پاک کی خوبصورت تلاوت"}]
+            }
+
+        valid_paths = {k: v for k, v in generated_paths.items() if v and os.path.exists(v)}
+
+        if valid_paths:
+            print(f"\n========================================")
+            print(f"🚀 INITIATING MANUAL UPLOAD [{self.active_profile.upper()}]...")
+            print(f"========================================")
+            with self.creds_lock:
+                self.stage_credentials(self.active_profile)
+                prof_settings = self.master_settings[self.active_profile].copy()
+                prof_settings["current_profile_name"] = self.active_profile
+                
+                def upload_thread():
+                    if 'ig' in valid_paths:
+                        print(f"   > 📤 Pushing Instagram variant: {os.path.basename(valid_paths['ig'])}")
+                        temp_set_ig = prof_settings.copy()
+                        temp_set_ig['enable_yt'] = False
+                        
+                        reciter_name = prof_settings.get("reciter_name", "Sheikh Husary (Safe)")
+                        clean_reciter_name = reciter_name.replace(" (Safe)", "").replace(" (High Copyright Risk)", "")
+                        thumb_path = os.path.join(install_dir, "reciter_photos", f"{reciter_name}.jpg")
+                        if not os.path.exists(thumb_path):
+                            thumb_path = os.path.join(install_dir, "reciter_photos", f"{clean_reciter_name}.jpg")
+                        if not os.path.exists(thumb_path):
+                            thumb_path = None
                             
-                            reciter_name = prof_settings.get("reciter_name", "Sheikh Husary (Safe)")
-                            clean_reciter_name = reciter_name.replace(" (Safe)", "").replace(" (High Copyright Risk)", "")
-                            thumb_path = os.path.join(install_dir, "reciter_photos", f"{reciter_name}.jpg")
-                            if not os.path.exists(thumb_path):
-                                thumb_path = os.path.join(install_dir, "reciter_photos", f"{clean_reciter_name}.jpg")
-                            if not os.path.exists(thumb_path):
-                                thumb_path = None
-                                
-                            social_engine.run_all_uploads(generated_paths['ig'], self.last_quran_data, temp_set_ig, thumbnail_path=thumb_path)
-                            gc.collect()
-                            
-                        if 'yt' in generated_paths and os.path.exists(generated_paths['yt']):
-                            print(f"   > 📤 Pushing YouTube variant...")
-                            temp_set_yt = prof_settings.copy()
-                            temp_set_yt['enable_fb'] = False
-                            temp_set_yt['enable_ig'] = False
-                            social_engine.run_all_uploads(generated_paths['yt'], self.last_quran_data, temp_set_yt)
-                            gc.collect()
-                            
-                        print("   > ✅ Manual Upload Routine Complete.")
+                        social_engine.run_all_uploads(valid_paths['ig'], quran_data, temp_set_ig, thumbnail_path=thumb_path)
                         gc.collect()
+                        
+                    if 'yt' in valid_paths:
+                        print(f"   > 📤 Pushing YouTube variant: {os.path.basename(valid_paths['yt'])}")
+                        temp_set_yt = prof_settings.copy()
+                        temp_set_yt['enable_fb'] = False
+                        temp_set_yt['enable_ig'] = False
+                        social_engine.run_all_uploads(valid_paths['yt'], quran_data, temp_set_yt)
+                        gc.collect()
+                        
+                    print("   > ✅ Manual Upload Routine Complete.")
+                    gc.collect()
 
-                    threading.Thread(target=upload_thread, daemon=True).start()
-            else:
-                messagebox.showerror("Error", "Video files not found or metadata missing. Render a reel first!")
+                threading.Thread(target=upload_thread, daemon=True).start()
         else:
-            messagebox.showerror("Error", "No previous video record found.")
+            messagebox.showerror("Error", f"No rendered video files found in output folders for profile '{self.active_profile}'. Render a reel first!")
 
     def scan_fonts(self):
         font_dir = os.path.join(install_dir, "font")
@@ -742,9 +829,9 @@ class IslamicReelsStudio(ctk.CTk):
 
         hw_row = ctk.CTkFrame(gen_frame, fg_color="transparent")
         hw_row.pack(fill="x", pady=5)
-        ctk.CTkLabel(hw_row, text="CPU Core Limit:").pack(side="left", padx=(0, 10))
-        cpu_var = ctk.StringVar(value=self.get_active_setting("cpu_core_limit", "1 Core (Low-End PC/VPS)"))
-        cpu_menu = ctk.CTkOptionMenu(hw_row, variable=cpu_var, values=["1 Core (Low-End PC/VPS)", "Max Cores (Fast PC)"], width=220, command=lambda v: self.set_active_setting("cpu_core_limit", v))
+        ctk.CTkLabel(hw_row, text="Hardware Optimizer Profile:").pack(side="left", padx=(0, 10))
+        cpu_var = ctk.StringVar(value=self.get_active_setting("cpu_core_limit", "Auto-Detect Hardware (Recommended)"))
+        cpu_menu = ctk.CTkOptionMenu(hw_row, variable=cpu_var, values=["Auto-Detect Hardware (Recommended)", "1 Core (Low-End PC/VPS)", "Max Performance (Fast PC)"], width=240, command=lambda v: self.set_active_setting("cpu_core_limit", v))
         cpu_menu.pack(side="left")
 
         ctk.CTkLabel(gen_frame, text="Active Posting Platforms", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(15, 5))
@@ -1362,7 +1449,10 @@ class IslamicReelsStudio(ctk.CTk):
             
             last_video_file = os.path.join(app_data_dir, f"last_rendered_video_{target_prof}.json")
             with open(last_video_file, "w") as f:
-                json.dump(generated_paths, f)
+                json.dump({
+                    "generated_paths": generated_paths,
+                    "quran_data": quran_data
+                }, f)
                 
             audio_generator.cleanup_audio_files(sequence_data)
             cloud_log_text = f"{dynamic_ref} | [BG: {bg_name}]"
@@ -1428,9 +1518,48 @@ class IslamicReelsStudio(ctk.CTk):
             return False, None
         finally:
             self.cleanup_root_clutter()
+
+    def precheck_all_youtube_tokens(self):
+        """
+        Pre-flight YouTube token authentication check for all profiles.
+        If any profile token is missing or expired, it opens the browser DIRECTLY
+        to authenticate channel 1, channel 2, etc. BEFORE video compilation starts!
+        """
+        print("\n======================================================================")
+        print("🔐 PRE-FLIGHT YOUTUBE CREDENTIALS CHECK...")
+        print("======================================================================")
+        
+        for prof_name, settings in self.master_settings.items():
+            if not settings.get("enable_yt", True):
+                print(f"   > ⏭️ Skipping YouTube auth check for [{prof_name}]: YouTube disabled in settings.")
+                continue
+                
+            token_path = os.path.join(creds_vault_dir, prof_name, "token.json")
+            print(f"   > 🔑 Verifying YouTube OAuth token for profile: [{prof_name.upper()}]...")
+            try:
+                youtube = social_engine.get_authenticated_youtube_service(token_path)
+                if youtube:
+                    print(f"   > ✅ Profile [{prof_name}]: YouTube Channel Verified & Logged In!")
+                else:
+                    print(f"   > ⚠️ Profile [{prof_name}]: Could not authenticate YouTube token.")
+            except Exception as auth_err:
+                print(f"   > ⚠️ Profile [{prof_name}]: Pre-Auth Notice: {auth_err}")
+                
+        print("======================================================================\n")
+
     def run_pipeline(self, yt_active=True, insta_active=True, fb_active=True):
         print("========================================")
         
+        # 🔍 PRE-FLIGHT ENVIRONMENT & CLOUD HOSTING CHECK BEFORE GENERATION
+        try:
+            environment_precheck.run_environment_precheck(verbose=True)
+        except Exception as precheck_err:
+            print(f"⚠️ Notice: Pre-flight check notice: {precheck_err}")
+
+        # 🔐 PRE-FLIGHT YOUTUBE TOKEN CHECK BEFORE COMPILING REELS
+        if yt_active:
+            self.precheck_all_youtube_tokens()
+
         any_auto = any(p.get("auto_upload", False) for p in self.master_settings.values())
         master_url = "https://docs.google.com/spreadsheets/d/1Q5E6w4PkKR6vS__Fd8Go6rHBIG0nsKdeuly6lHTPVGE/edit?gid=0#gid=0" 
         

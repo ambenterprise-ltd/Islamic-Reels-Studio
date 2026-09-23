@@ -24,6 +24,7 @@ recovered_*
 # ---------------------------------------------
 credentials/
 credentials.zip
+Assests.zip
 *.json
 *.pem
 

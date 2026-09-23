@@ -24,6 +24,8 @@ Source: "video_composer.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "news_gatherer.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "social_engine.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cloud_logger.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "hardware_optimizer.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "environment_precheck.py"; DestDir: "{app}"; Flags: ignoreversion
 
 ; --- 3. Required Asset Folders (Shorts Only) ---
 Source: "backgrounds\*"; DestDir: "{app}\backgrounds"; Flags: ignoreversion recursesubdirs createallsubdirs
