@@ -8,6 +8,11 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 # ---------------------------
 
+import os
+_base_dir = os.path.dirname(os.path.abspath(__file__)) if not getattr(sys, 'frozen', False) else os.path.dirname(sys.executable)
+if _base_dir and _base_dir not in sys.path:
+    sys.path.insert(0, _base_dir)
+
 import multiprocessing
 import audio_generator
 import video_composer
@@ -70,7 +75,7 @@ import glob
 import json
 import time
 import shutil 
-from datetime import datetime
+from datetime import datetime, timedelta
 try:
     import pystray
     HAS_PYSTRAY = True
@@ -225,10 +230,12 @@ class IslamicReelsStudio(ctk.CTk):
             print(f"⚠️ Hardware optimizer report notice: {hw_err}")
         sys.stdout.flush()
         
-        try:
-            environment_precheck.run_environment_precheck(verbose=True)
-        except Exception as precheck_e:
-            print(f"⚠️ Notice: Rapid precheck encountered non-fatal exception: {precheck_e}")
+        def bg_precheck():
+            try:
+                environment_precheck.run_environment_precheck(verbose=True)
+            except Exception as precheck_e:
+                print(f"⚠️ Notice: Rapid precheck encountered non-fatal exception: {precheck_e}")
+        threading.Thread(target=bg_precheck, daemon=True).start()
 
         self.is_startup_launch = "--startup" in sys.argv
         
@@ -644,6 +651,31 @@ class IslamicReelsStudio(ctk.CTk):
         if self.active_profile and self.active_profile in self.master_settings:
             self.master_settings[self.active_profile][key] = value
 
+    def get_shared_sheet_url(self, profile_name=None):
+        """Returns the single shared Google Sheet URL from profile settings or default master."""
+        DEFAULT_MASTER_SHEET = "https://docs.google.com/spreadsheets/d/1Q5E6w4PkKR6vS__Fd8Go6rHBIG0nsKdeuly6lHTPVGE/edit?gid=0#gid=0"
+        target = profile_name if profile_name else self.active_profile
+        if target and target in self.master_settings:
+            u = self.master_settings[target].get("personal_sheet_url", "").strip()
+            if u:
+                return u
+        u_active = self.get_active_setting("personal_sheet_url", "").strip()
+        if u_active:
+            return u_active
+        for p_data in self.master_settings.values():
+            u = p_data.get("personal_sheet_url", "").strip()
+            if u and ("docs.google.com" in u or len(u) > 15):
+                return u
+        return DEFAULT_MASTER_SHEET
+
+    def get_last_post_timestamp(self, profile_name):
+        """Queries cloud_logger for the specified profile's tab in the shared Google Sheet."""
+        shared_url = self.get_shared_sheet_url(profile_name)
+        profile_creds = os.path.join(creds_vault_dir, profile_name, "sheets_secret.json")
+        if not os.path.exists(profile_creds):
+            profile_creds = "sheets_secret.json"
+        return cloud_logger.get_last_post_timestamp(profile_name, sheet_url=shared_url, creds_path=profile_creds)
+
     def populate_main_ui(self):
         self.active_display.configure(text=f"Currently Managing: {self.active_profile}")
         self.lang_var.set(self.get_active_setting("render_mode", "Arabic Voice + Bilingual (Urdu)"))
@@ -684,18 +716,32 @@ class IslamicReelsStudio(ctk.CTk):
 
     def countdown_worker(self):
         while True:
-            if getattr(self, 'is_running', False) or not self.is_uploading:
+            # Only update countdown when engine is idle (not running or uploading)
+            if not getattr(self, 'is_running', False) and not getattr(self, 'is_uploading', False):
                 timer_lines = []
                 for prof_name, settings in self.master_settings.items():
                     if not settings.get("auto_upload", False): continue 
                     interval_hrs = settings.get("upload_interval", 2)
-                    local_fallback_file = f"last_post_{prof_name}.txt"
+                    
+                    elapsed_info = None
+                    try:
+                        elapsed_info = self.get_last_post_timestamp(prof_name)
+                    except Exception:
+                        pass
+
                     last_time = None
-                    if os.path.exists(local_fallback_file):
-                        try:
-                            with open(local_fallback_file, "r") as f:
-                                last_time = datetime.fromisoformat(f.read().strip())
-                        except: pass
+                    if elapsed_info and elapsed_info != "API_ERROR":
+                        last_time = getattr(elapsed_info, "last_post_time", None)
+
+                    if not last_time:
+                        local_fallback_file = f"last_post_{prof_name}.txt"
+                        if os.path.exists(local_fallback_file):
+                            try:
+                                with open(local_fallback_file, "r") as f:
+                                    last_time = datetime.fromisoformat(f.read().strip())
+                            except Exception:
+                                pass
+
                     if last_time:
                         safe_last_time = last_time.replace(tzinfo=None) if last_time.tzinfo else last_time
                         delta = datetime.now() - safe_last_time
@@ -703,25 +749,25 @@ class IslamicReelsStudio(ctk.CTk):
                         if delta_hrs >= interval_hrs:
                             timer_lines.append(f"✅ {prof_name}: READY TO POST")
                         else:
-                            mins_left = (interval_hrs - delta_hrs) * 60
+                            mins_left = max(0, (interval_hrs - delta_hrs) * 60)
                             hrs = int(mins_left // 60)
                             mns = int(mins_left % 60)
-                            timer_lines.append(f"⏳ {prof_name}: In {hrs}h {mns}m")
+                            timer_lines.append(f"⏳ {prof_name}: Next post in {hrs}h {mns}m")
                     else:
-                        timer_lines.append(f"⏳ {prof_name}: Pending First Post / Checking...")
+                        timer_lines.append(f"✅ {prof_name}: READY (Pending First Post)")
                 if timer_lines:
                     final_text = "\n".join(timer_lines)
                     color = CHAMPAGNE_SEC
                 else:
                     final_text = "⏸️ All Automation Loops Paused"
                     color = "gray"
-                self.after(1000, lambda t=final_text, c=color: self.lbl_countdown.configure(text=t, text_color=c))
+                self.after(0, lambda t=final_text, c=color: self.lbl_countdown.configure(text=t, text_color=c))
             time.sleep(30)
 
 
     def auto_start_check(self):
         any_auto = any(p.get("auto_upload", False) for p in self.master_settings.values())
-        if any_auto: self.toggle_automation()
+        if any_auto: self.start_engine()
         else: print("   > ℹ️ Auto-Launch: App started with Windows, but Automation Loops are OFF. Standing by.")
 
     def hide_window(self):
@@ -801,9 +847,11 @@ class IslamicReelsStudio(ctk.CTk):
             
         try:
             status = social_engine.check_server_status(self.master_settings[self.active_profile])
-            sheet_url = self.get_active_setting("personal_sheet_url", "") 
+            sheet_url = self.get_shared_sheet_url(self.active_profile) 
             profile_creds = os.path.join(creds_vault_dir, self.active_profile, "sheets_secret.json")
-            self.last_time = cloud_logger.get_last_post_time(sheet_url, creds_path=profile_creds)
+            if not os.path.exists(profile_creds):
+                profile_creds = "sheets_secret.json"
+            self.last_time = cloud_logger.get_last_post_time(sheet_url, profile_name=self.active_profile, creds_path=profile_creds)
         except Exception:
             status = {"meta_time": "Error", "facebook": "Network Error", "youtube": "Network Error"}
             self.last_time = "API_ERROR"
@@ -1290,7 +1338,7 @@ class IslamicReelsStudio(ctk.CTk):
         sync_row.pack(fill="x", pady=10)
         
         def backup_to_cloud():
-            url = self.get_active_setting("personal_sheet_url", "")
+            url = self.get_shared_sheet_url(self.active_profile)
             if not url or not os.path.exists(prof_sheet_path):
                 messagebox.showerror("Sync Error", "Please enter a valid Google Sheet URL and install the Service JSON first.")
                 return
@@ -1301,7 +1349,7 @@ class IslamicReelsStudio(ctk.CTk):
             else: messagebox.showerror("Sync Error", "Failed to upload to Google Sheets. Check the terminal log.")
 
         def restore_from_cloud():
-            url = self.get_active_setting("personal_sheet_url", "")
+            url = self.get_shared_sheet_url(self.active_profile)
             if not url or not os.path.exists(prof_sheet_path):
                 messagebox.showerror("Sync Error", "Please enter a valid Google Sheet URL and install the Service JSON first.")
                 return
@@ -1878,28 +1926,80 @@ class IslamicReelsStudio(ctk.CTk):
             command=save_and_close
         ).pack(fill="x", padx=100)
 
+    def start_engine(self):
+        """
+        Starts the automation engine inside a dedicated daemon thread.
+        All GUI label and widget state updates are dispatched safely via self.after().
+        """
+        if getattr(self, 'engine_thread_active', False) or getattr(self, 'is_running', False):
+            print("   > ℹ️ Automation Engine is already active.")
+            return
+
+        self.is_running = True
+        self.engine_thread_active = True
+
+        self.after(0, lambda: self.generate_btn.configure(
+            text="🛑 STOP ENGINE",
+            fg_color=CRIMSON_STOP,
+            hover_color=CRIMSON_HOVER,
+            text_color=TEXT_WHITE
+        ))
+        def clear_log():
+            try:
+                self.log_textbox.configure(state="normal")
+                self.log_textbox.delete("1.0", "end")
+                self.log_textbox.configure(state="disabled")
+            except Exception:
+                pass
+        self.after(0, clear_log)
+        self.after(0, lambda: self.lbl_countdown.configure(
+            text="🚀 Initializing Engine & Pre-Flight Checks...",
+            text_color=CHAMPAGNE_SEC
+        ))
+
+        yt_active = bool(self.yt_toggle.get() in [1, True, "1", "True"])
+        insta_active = bool(self.insta_toggle.get() in [1, True, "1", "True"])
+        fb_active = bool(self.fb_toggle.get() in [1, True, "1", "True"])
+
+        # Dedicated background daemon thread
+        self.engine_thread = threading.Thread(
+            target=self.run_pipeline,
+            args=(yt_active, insta_active, fb_active),
+            daemon=True
+        )
+        self.engine_thread.start()
+
+    def stop_engine(self):
+        """Gracefully halts the automation engine and safely resets UI controls."""
+        self.is_running = False
+        self.engine_thread_active = False
+        print("\n🛑 Nuclear Kill-Switch Activated: Halting all render and upload processes...")
+        self.after(0, lambda: self.generate_btn.configure(
+            text="🎬 START AUTOMATION ENGINE",
+            fg_color=TEAL_PRIMARY,
+            hover_color=TEAL_HOVER,
+            text_color=TEXT_WHITE
+        ))
+        self.after(0, lambda: self.lbl_countdown.configure(
+            text="⏸️ All Automation Loops Paused",
+            text_color="gray"
+        ))
+
     def toggle_automation(self):
-        if getattr(self, 'engine_thread_active', False):
-            self.is_running = False
-            self.engine_thread_active = False
-            self.generate_btn.configure(text="🎬 START AUTOMATION ENGINE", fg_color=TEAL_PRIMARY, hover_color=TEAL_HOVER, text_color=TEXT_WHITE)
-            print("\n🛑 Nuclear Kill-Switch Activated: Halting all render and upload processes...")
+        """Action handler for the Start / Stop Engine button."""
+        if getattr(self, 'engine_thread_active', False) or getattr(self, 'is_running', False):
+            self.stop_engine()
         else:
-            self.is_running = True
-            self.engine_thread_active = True
-            self.generate_btn.configure(text="🛑 STOP ENGINE", fg_color=CRIMSON_STOP, hover_color=CRIMSON_HOVER, text_color=TEXT_WHITE)
-            self.log_textbox.configure(state="normal")
-            self.log_textbox.delete("1.0", "end") 
-            self.log_textbox.configure(state="disabled")
-            yt_active = bool(self.yt_toggle.get() in [1, True, "1", "True"])
-            insta_active = bool(self.insta_toggle.get() in [1, True, "1", "True"])
-            fb_active = bool(self.fb_toggle.get() in [1, True, "1", "True"])
-            threading.Thread(target=self.run_pipeline, args=(yt_active, insta_active, fb_active), daemon=True).start()
+            self.start_engine()
 
     def execute_render_and_upload(self, prof_name=None, yt_active=True, insta_active=True, fb_active=True):
         try:
             target_prof = prof_name if prof_name else self.active_profile
             print(f"🚀 INITIALIZING RENDER: [{target_prof.upper()}] - Mode: {self.get_active_setting('render_mode', 'Arabic Voice + Bilingual (Urdu)')}")
+            self.after(0, lambda p=target_prof: self.lbl_countdown.configure(
+                text=f"🎬 Rendering [{p.upper()}] Video...",
+                text_color="#00A8B5"
+            ))
             
             with self.creds_lock:
                 self.stage_credentials(target_prof)
@@ -1982,8 +2082,13 @@ class IslamicReelsStudio(ctk.CTk):
                         "quran_data": payload
                     }, f)
 
+                yt_video_id = None
                 if prof_settings.get("auto_upload", False):
                     print("   > 🚀 Auto-Upload is ON. Pushing repurposed TikTok video directly to platforms...")
+                    self.after(0, lambda p=target_prof: self.lbl_countdown.configure(
+                        text=f"📤 Auto-Uploading TikTok [{p.upper()}]...",
+                        text_color="#2CC985"
+                    ))
                     upload_success = True
                     try:
                         if 'ig' in generated_paths:
@@ -1999,7 +2104,7 @@ class IslamicReelsStudio(ctk.CTk):
                             temp_set_yt['enable_fb'] = False
                             temp_set_yt['enable_ig'] = False
                             temp_set_yt['enable_yt'] = yt_active
-                            social_engine.run_all_uploads(generated_paths['yt'], payload, temp_set_yt, abort_check=lambda: getattr(self, 'is_running', True))
+                            yt_video_id = social_engine.run_all_uploads(generated_paths['yt'], payload, temp_set_yt, abort_check=lambda: getattr(self, 'is_running', True))
                             gc.collect()
                     except Exception as upload_err:
                         print(f"   > ❌ TikTok Social Upload Failed: {upload_err}")
@@ -2014,7 +2119,13 @@ class IslamicReelsStudio(ctk.CTk):
                 else:
                     print(f"   > ⏸️ Auto-Upload is OFF. TikTok video safely saved in output folders awaiting Manual Upload.")
 
-                return (True, f"TikTok: @{target_user} [{item['id']}]")
+                post_info = {
+                    "verse_target": f"TikTok @{target_user} [{item['id']}]",
+                    "topic_target": "Viral TikTok Repurposer",
+                    "youtube_video_id": yt_video_id or "",
+                    "cloud_log_text": f"TikTok: @{target_user} [{item['id']}]"
+                }
+                return (True, post_info)
 
             # 🌟 ROUTE PIPELINE: Quran Tilawat Mode (Standard)
             
@@ -2150,8 +2261,13 @@ class IslamicReelsStudio(ctk.CTk):
             if 'yt' in generated_paths:
                 print(f"   > 🛡️ [DIAGNOSTIC] YT video path exists: {os.path.exists(generated_paths['yt'])} ({generated_paths['yt']})")
                 
+            yt_video_id = None
             if prof_settings.get("auto_upload", False):
                 print("   > 🚀 Auto-Upload is ON. Pushing directly to servers...")
+                self.after(0, lambda p=target_prof: self.lbl_countdown.configure(
+                    text=f"📤 Auto-Uploading Reel [{p.upper()}]...",
+                    text_color="#2CC985"
+                ))
                 if 'ig' in generated_paths:
                     temp_set_ig = prof_settings.copy()
                     temp_set_ig['enable_yt'] = False
@@ -2172,7 +2288,7 @@ class IslamicReelsStudio(ctk.CTk):
                     temp_set_yt['enable_fb'] = False
                     temp_set_yt['enable_ig'] = False
                     temp_set_yt['enable_yt'] = yt_active
-                    social_engine.run_all_uploads(generated_paths['yt'], quran_data, temp_set_yt, abort_check=lambda: getattr(self, 'is_running', True))
+                    yt_video_id = social_engine.run_all_uploads(generated_paths['yt'], quran_data, temp_set_yt, abort_check=lambda: getattr(self, 'is_running', True))
             else:
                 print("   > ⏸️ Auto-Upload is OFF. Videos safely stored in output folders awaiting Manual Upload command.")
             
@@ -2195,9 +2311,17 @@ class IslamicReelsStudio(ctk.CTk):
             
             print("   > 🧹 Sweeping RAM and clearing memory cache for next loop...")
             sequence_data.clear() 
-            gc.collect() 
-            
-            return True, cloud_log_text
+            self.after(0, lambda p=target_prof: self.lbl_countdown.configure(
+                text=f"✅ [{p.upper()}] Loop Completed",
+                text_color="#2FA572"
+            ))
+            post_info = {
+                "verse_target": dynamic_ref,
+                "topic_target": f"Quran Tilawat ({selected_theme})",
+                "youtube_video_id": yt_video_id or "",
+                "cloud_log_text": cloud_log_text
+            }
+            return True, post_info
         except Exception as e:
             import traceback
             print(f"\n❌ RENDER ERROR:\n{traceback.format_exc()}")
@@ -2210,27 +2334,43 @@ class IslamicReelsStudio(ctk.CTk):
         Pre-flight YouTube token authentication check for all profiles.
         If any profile token is missing or expired, it opens the browser DIRECTLY
         to authenticate channel 1, channel 2, etc. BEFORE video compilation starts!
+        Updates GUI labels safely via self.after().
         """
         print("\n======================================================================")
         print("🔐 PRE-FLIGHT YOUTUBE CREDENTIALS CHECK...")
         print("======================================================================")
         
         for prof_name, settings in self.master_settings.items():
+            if not getattr(self, 'is_running', True):
+                break
             if not settings.get("enable_yt", True):
                 print(f"   > ⏭️ Skipping YouTube auth check for [{prof_name}]: YouTube disabled in settings.")
                 continue
                 
             token_path = os.path.join(creds_vault_dir, prof_name, "token.json")
             print(f"   > 🔑 Verifying YouTube OAuth token for profile: [{prof_name.upper()}]...")
+            self.after(0, lambda p=prof_name: self.lbl_countdown.configure(
+                text=f"🔐 Verifying YouTube Channel Auth: [{p.upper()}]...",
+                text_color=CHAMPAGNE_SEC
+            ))
+            self.after(0, lambda: self.lbl_yt.configure(text="🟡 Verifying Auth...", text_color="gray"))
+
             try:
                 youtube = social_engine.get_authenticated_youtube_service(token_path)
                 if youtube:
                     print(f"   > ✅ Profile [{prof_name}]: YouTube Channel Verified & Logged In!")
+                    self.after(0, lambda: self.lbl_yt.configure(text="🟢 YT API OK", text_color="#2FA572"))
                 else:
                     print(f"   > ⚠️ Profile [{prof_name}]: Could not authenticate YouTube token.")
+                    self.after(0, lambda: self.lbl_yt.configure(text="🔴 YT Auth Fail", text_color="#D9534F"))
             except Exception as auth_err:
                 print(f"   > ⚠️ Profile [{prof_name}]: Pre-Auth Notice: {auth_err}")
+                self.after(0, lambda: self.lbl_yt.configure(text="🔴 YT Auth Fail", text_color="#D9534F"))
                 
+        self.after(0, lambda: self.lbl_countdown.configure(
+            text="🚀 Pre-Flight Checks Complete. Starting Pipeline...",
+            text_color="#2FA572"
+        ))
         print("======================================================================\n")
 
     def run_pipeline(self, yt_active=True, insta_active=True, fb_active=True):
@@ -2238,12 +2378,16 @@ class IslamicReelsStudio(ctk.CTk):
         
         # 🔍 PRE-FLIGHT ENVIRONMENT & CLOUD HOSTING CHECK BEFORE GENERATION
         try:
+            self.after(0, lambda: self.lbl_countdown.configure(
+                text="🔍 Pre-Flight: Checking Environment & Hosting...",
+                text_color=CHAMPAGNE_SEC
+            ))
             environment_precheck.run_environment_precheck(verbose=True)
         except Exception as precheck_err:
             print(f"⚠️ Notice: Pre-flight check notice: {precheck_err}")
 
         # 🔐 PRE-FLIGHT YOUTUBE TOKEN CHECK BEFORE COMPILING REELS
-        if yt_active:
+        if yt_active and getattr(self, 'is_running', True):
             self.precheck_all_youtube_tokens()
 
         any_auto = any(p.get("auto_upload", False) for p in self.master_settings.values())
@@ -2254,23 +2398,48 @@ class IslamicReelsStudio(ctk.CTk):
             print("========================================")
             
             self.is_uploading = True
-            success, cloud_log_text = self.execute_render_and_upload(self.active_profile, yt_active, insta_active, fb_active)
+            success, post_data = self.execute_render_and_upload(self.active_profile, yt_active, insta_active, fb_active)
             gc.collect()
             if success and getattr(self, 'is_running', False):
                 with self.creds_lock:
                     self.stage_credentials(self.active_profile)
                     
                 if self.get_active_setting("enable_sheet_logs", True):
-                    personal_url = self.get_active_setting("personal_sheet_url", "")
+                    shared_url = self.get_shared_sheet_url(self.active_profile)
                     profile_creds = os.path.join(creds_vault_dir, self.active_profile, "sheets_secret.json")
-                    cloud_logger.log_post(personal_url, master_url, cloud_log_text, creds_path=profile_creds)
+                    if not os.path.exists(profile_creds):
+                        profile_creds = "sheets_secret.json"
+
+                    verse_target = post_data.get("verse_target", "Quran Recitation") if isinstance(post_data, dict) else str(post_data)
+                    topic_target = post_data.get("topic_target", "Islamic Reel") if isinstance(post_data, dict) else "Islamic Reel"
+                    yt_id = post_data.get("youtube_video_id", "") if isinstance(post_data, dict) else ""
+
+                    cloud_logger.log_post(
+                        sheet_url=shared_url,
+                        profile_name=self.active_profile,
+                        verse_target=verse_target,
+                        topic_target=topic_target,
+                        youtube_video_id=yt_id,
+                        status="Success",
+                        creds_path=profile_creds
+                    )
                 else:
                     print("   > ☁️ Local logs only. Google Sheets logging is disabled for this profile.")
                     
             self.is_uploading = False
             self.is_running = False
+            self.engine_thread_active = False
             gc.collect()
-            self.after(0, lambda: self.generate_btn.configure(text="🎬 START AUTOMATION ENGINE", fg_color=TEAL_PRIMARY, hover_color=TEAL_HOVER, text_color=TEXT_WHITE))
+            self.after(0, lambda: self.generate_btn.configure(
+                text="🎬 START AUTOMATION ENGINE",
+                fg_color=TEAL_PRIMARY,
+                hover_color=TEAL_HOVER,
+                text_color=TEXT_WHITE
+            ))
+            self.after(0, lambda: self.lbl_countdown.configure(
+                text="✅ Single Loop Complete",
+                text_color="#2FA572"
+            ))
             return
 
         print("☁️ AGENCY ROUND-ROBIN POLLING INITIATED")
@@ -2286,74 +2455,88 @@ class IslamicReelsStudio(ctk.CTk):
                         with self.creds_lock:
                             self.stage_credentials(prof_name)
                             
-                        personal_url = settings.get("personal_sheet_url", "")
+                        shared_url = self.get_shared_sheet_url(prof_name)
                         interval_hrs = settings.get("upload_interval", 2)
+                        interval_delta = timedelta(hours=interval_hrs)
                         local_fallback_file = f"last_post_{prof_name}.txt"
                         
-                        cloud_time = None
+                        elapsed_info = None
                         try:
-                            profile_creds = os.path.join(creds_vault_dir, prof_name, "sheets_secret.json")
-                            cloud_time = cloud_logger.get_last_post_time(personal_url, creds_path=profile_creds)
-                        except: 
-                            pass
-                        
-                        local_time = None
-                        if os.path.exists(local_fallback_file):
-                            try:
-                                with open(local_fallback_file, "r") as f:
-                                    local_time = datetime.fromisoformat(f.read().strip())
-                            except:
-                                pass
+                            elapsed_info = self.get_last_post_timestamp(prof_name)
+                        except Exception as sheet_err:
+                            print(f"   > ⚠️ Sheets query notice [{prof_name}]: {sheet_err}")
 
                         last_post_time = None
-                        if cloud_time and cloud_time != "API_ERROR" and local_time:
-                            ct = cloud_time.replace(tzinfo=None) if cloud_time.tzinfo else cloud_time
-                            lt = local_time.replace(tzinfo=None) if local_time.tzinfo else local_time
-                            last_post_time = cloud_time if ct > lt else local_time
-                        elif cloud_time and cloud_time != "API_ERROR":
-                            last_post_time = cloud_time
-                        elif local_time:
-                            last_post_time = local_time
+                        if elapsed_info and elapsed_info != "API_ERROR":
+                            last_post_time = getattr(elapsed_info, "last_post_time", None)
+
+                        if not last_post_time and os.path.exists(local_fallback_file):
+                            try:
+                                with open(local_fallback_file, "r") as f:
+                                    last_post_time = datetime.fromisoformat(f.read().strip())
+                            except Exception:
+                                pass
 
                         now = datetime.now()
                         should_post = False
                         
                         if not last_post_time:
-                            if personal_url == "": print(f"   > ⚠️ Warning [{prof_name}]: No Personal Sheet URL provided.")
-                            else: print(f"   > 📊 Sheet [{prof_name}]: No previous logs found. Triggering immediate post...")
+                            print(f"   > 📊 Tab [{prof_name}]: No previous post logs found. Triggering immediate post...")
                             should_post = True
                         else:
-                            safe_last_time = last_post_time
-                            if getattr(safe_last_time, 'tzinfo', None) is not None:
-                                safe_last_time = safe_last_time.replace(tzinfo=None)
-                                
-                            delta = now - safe_last_time
-                            delta_hrs = delta.total_seconds() / 3600
-                            if delta_hrs >= interval_hrs:
-                                print(f"   > ⏰ Timer [{prof_name}]: {delta_hrs:.2f} hours passed (Target: {interval_hrs}h). Triggering post...")
+                            safe_last_time = last_post_time.replace(tzinfo=None) if last_post_time.tzinfo else last_post_time
+                            elapsed = now - safe_last_time
+                            if elapsed >= interval_delta:
+                                delta_hrs = elapsed.total_seconds() / 3600
+                                print(f"   > ⏰ Interval [{prof_name}]: {delta_hrs:.2f}h elapsed (Target: {interval_hrs}h). Triggering post...")
                                 should_post = True
-                                
+                            else:
+                                remaining = interval_delta - elapsed
+                                rem_mins = max(0, int(remaining.total_seconds() / 60))
+                                rem_hrs = rem_mins // 60
+                                rem_mins_rem = rem_mins % 60
+                                status_msg = f"Next post in {rem_hrs}h {rem_mins_rem}m"
+                                print(f"   > ⏳ Tab [{prof_name}]: Deferring ({status_msg}). Interval requirement not met.")
+                                self.after(0, lambda p=prof_name, m=status_msg: self.lbl_countdown.configure(
+                                    text=f"⏳ [{p.upper()}]: {m}",
+                                    text_color=CHAMPAGNE_SEC
+                                ))
+
                         if should_post:
                             self.is_uploading = True 
                             
                             try:
                                 with open(local_fallback_file, "w") as f:
                                     f.write(datetime.now().isoformat())
-                            except: pass
+                            except Exception: pass
 
                             yt_p = bool(settings.get("enable_yt", True))
                             insta_p = bool(settings.get("enable_ig", True))
                             fb_p = bool(settings.get("enable_fb", True))
-                            success, cloud_log_text = self.execute_render_and_upload(prof_name, yt_p, insta_p, fb_p)
+                            success, post_data = self.execute_render_and_upload(prof_name, yt_p, insta_p, fb_p)
                             
                             if success and self.is_running:
                                 with self.creds_lock:
                                     self.stage_credentials(prof_name)
                                     
                                 if settings.get("enable_sheet_logs", True):
-                                    personal_url = settings.get("personal_sheet_url", "")
                                     profile_creds = os.path.join(creds_vault_dir, prof_name, "sheets_secret.json")
-                                    cloud_logger.log_post(personal_url, master_url, cloud_log_text, creds_path=profile_creds)
+                                    if not os.path.exists(profile_creds):
+                                        profile_creds = "sheets_secret.json"
+
+                                    verse_target = post_data.get("verse_target", "Quran Recitation") if isinstance(post_data, dict) else str(post_data)
+                                    topic_target = post_data.get("topic_target", "Islamic Reel") if isinstance(post_data, dict) else "Islamic Reel"
+                                    yt_id = post_data.get("youtube_video_id", "") if isinstance(post_data, dict) else ""
+
+                                    cloud_logger.log_post(
+                                        sheet_url=shared_url,
+                                        profile_name=prof_name,
+                                        verse_target=verse_target,
+                                        topic_target=topic_target,
+                                        youtube_video_id=yt_id,
+                                        status="Success",
+                                        creds_path=profile_creds
+                                    )
                                 else:
                                     print("   > ☁️ Local logs only. Google Sheets logging is disabled for this profile.")
                                     
@@ -2386,7 +2569,17 @@ class IslamicReelsStudio(ctk.CTk):
         
         def reset_btn():
             self.engine_thread_active = False 
-            self.generate_btn.configure(text="🎬 START AUTOMATION ENGINE", fg_color=TEAL_PRIMARY, hover_color=TEAL_HOVER, text_color=TEXT_WHITE)
+            self.is_running = False
+            self.generate_btn.configure(
+                text="🎬 START AUTOMATION ENGINE",
+                fg_color=TEAL_PRIMARY,
+                hover_color=TEAL_HOVER,
+                text_color=TEXT_WHITE
+            )
+            self.lbl_countdown.configure(
+                text="⏸️ All Automation Loops Paused",
+                text_color="gray"
+            )
         self.after(0, reset_btn)
 
 if __name__ == "__main__":

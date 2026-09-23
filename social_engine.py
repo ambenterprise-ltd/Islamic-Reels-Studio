@@ -624,7 +624,7 @@ def upload_to_youtube(video_path, title, description, token_path, thumbnail_path
     
     youtube = get_authenticated_youtube_service(token_path)
     if not youtube:
-        return
+        return None
 
     try:
         try:
@@ -642,7 +642,7 @@ def upload_to_youtube(video_path, title, description, token_path, thumbnail_path
                 os.remove(token_path)
             print("   > ❌ UPLOAD ABORTED to prevent posting to the wrong channel.")
             print("   > 🔄 ACTION REQUIRED: Please click 'Manual Upload' again. The browser WILL open this time!")
-            return 
+            return None 
 
         # Guarantee YouTube Shorts Routing via #Shorts in Title and Description
         clean_title = (title or "Viral Video").strip()
@@ -703,11 +703,14 @@ def upload_to_youtube(video_path, title, description, token_path, thumbnail_path
                     print(f"   > ✅ YouTube Custom Thumbnail set successfully!")
                 except Exception as thumb_err:
                     print(f"   > ⚠️ YouTube Thumbnail Notice: {thumb_err}")
+            return video_id
         else:
             print("   > ❌ YT Upload Failed: No response ID received.")
+            return None
         
     except Exception as e:
         print(f"   > ❌ YT Upload Exception: {e}")
+        return None
 
 def run_all_uploads(video_path, quran_data, settings, abort_check=None, thumbnail_path=None):
     if not os.path.exists(video_path): return
@@ -784,7 +787,8 @@ def run_all_uploads(video_path, quran_data, settings, abort_check=None, thumbnai
             print("   > ⏭️ Skipping Instagram (Turned off in settings)")
 
     # 3. YouTube (Routed to YouTube Shorts Shelf)
-    if abort_check and not abort_check(): return
+    yt_video_id = None
+    if abort_check and not abort_check(): return None
     if settings.get("enable_yt", True):
         if is_repurposed or quran_data.get("title"):
             clean_title = (quran_data.get("title") or "Viral Short").strip()
@@ -802,9 +806,10 @@ def run_all_uploads(video_path, quran_data, settings, abort_check=None, thumbnai
         # NEVER pass custom thumbnails to YouTube for repurposed videos!
         # Custom thumbnails force YouTube to place videos in the standard 'Videos' tab rather than 'Shorts'.
         yt_thumbnail = None if is_repurposed else local_thumb_file
-        upload_to_youtube(video_path, yt_title, caption, profile_yt_token, thumbnail_path=yt_thumbnail)
+        yt_video_id = upload_to_youtube(video_path, yt_title, caption, profile_yt_token, thumbnail_path=yt_thumbnail)
     else:
         if not global_enable_yt:
             print("   > ⏭️ Skipping YouTube (Turned off in settings)")
 
     print("========================================")
+    return yt_video_id
