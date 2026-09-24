@@ -2550,7 +2550,7 @@ class IslamicReelsStudio(ctk.CTk):
                                 rem_hrs = rem_mins // 60
                                 rem_mins_rem = rem_mins % 60
                                 status_msg = f"Next post in {rem_hrs}h {rem_mins_rem}m"
-                                print(f"   > ⏳ Tab [{prof_name}]: Deferring ({status_msg}). Interval requirement not met.")
+                                # print(f"   > ⏳ Tab [{prof_name}]: Deferring ({status_msg}). Interval requirement not met.")  # suppressed
                                 self.after(0, lambda p=prof_name, m=status_msg: self.lbl_countdown.configure(
                                     text=f"⏳ [{p.upper()}]: {m}",
                                     text_color=CHAMPAGNE_SEC
