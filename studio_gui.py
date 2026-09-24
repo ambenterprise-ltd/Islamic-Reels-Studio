@@ -280,6 +280,7 @@ class IslamicReelsStudio(ctk.CTk):
 
         self.creds_lock = threading.Lock()
         self.is_uploading = False
+        self.active_channel_status = {}
         
         self.master_settings = self.load_settings()
         if not self.master_settings:
@@ -747,13 +748,28 @@ class IslamicReelsStudio(ctk.CTk):
         self.set_active_setting("selected_theme", self.theme_var.get())
         self.save_settings()
 
+    def refresh_dashboard_countdown(self, color=CHAMPAGNE_SEC):
+        """Renders multi-line countdown status for all agency profiles simultaneously."""
+        lines = []
+        for prof_name, settings in self.master_settings.items():
+            if not settings.get("auto_upload", False):
+                lines.append(f"⏸️ [{prof_name.upper()}]: Automation Loop OFF")
+            elif prof_name in self.active_channel_status:
+                lines.append(self.active_channel_status[prof_name])
+            else:
+                lines.append(f"⏳ [{prof_name.upper()}]: Calculating...")
+        final_text = "\n".join(lines) if lines else "⏸️ All Automation Loops Paused"
+        self.after(0, lambda t=final_text, c=color: self.lbl_countdown.configure(text=t, text_color=c))
+
     def countdown_worker(self):
         while True:
             # Only update countdown when engine is idle (not running or uploading)
             if not getattr(self, 'is_running', False) and not getattr(self, 'is_uploading', False):
                 timer_lines = []
                 for prof_name, settings in self.master_settings.items():
-                    if not settings.get("auto_upload", False): continue 
+                    if not settings.get("auto_upload", False):
+                        timer_lines.append(f"⏸️ [{prof_name.upper()}]: Automation Loop OFF")
+                        continue 
                     interval_hrs = settings.get("upload_interval", 2)
                     
                     elapsed_info = None
@@ -783,14 +799,14 @@ class IslamicReelsStudio(ctk.CTk):
                         delta = now_dt - safe_last_time
                         delta_hrs = delta.total_seconds() / 3600
                         if delta_hrs >= interval_hrs:
-                            timer_lines.append(f"✅ {prof_name}: READY TO POST")
+                            timer_lines.append(f"✅ [{prof_name.upper()}]: READY TO POST")
                         else:
                             mins_left = max(0, min((interval_hrs - delta_hrs) * 60, interval_hrs * 60))
                             hrs = int(mins_left // 60)
                             mns = int(mins_left % 60)
-                            timer_lines.append(f"⏳ {prof_name}: Next post in {hrs}h {mns}m")
+                            timer_lines.append(f"⏳ [{prof_name.upper()}]: Next post in {hrs}h {mns}m")
                     else:
-                        timer_lines.append(f"✅ {prof_name}: READY (Pending First Post)")
+                        timer_lines.append(f"✅ [{prof_name.upper()}]: READY (Pending First Post)")
                 if timer_lines:
                     final_text = "\n".join(timer_lines)
                     color = CHAMPAGNE_SEC
@@ -2485,6 +2501,7 @@ class IslamicReelsStudio(ctk.CTk):
 
         print("☁️ AGENCY ROUND-ROBIN POLLING INITIATED")
         print("========================================")
+        self.refresh_dashboard_countdown()
         
         while self.is_running:
             try:
@@ -2523,6 +2540,8 @@ class IslamicReelsStudio(ctk.CTk):
                         
                         if not last_post_time:
                             print(f"   > 📊 Tab [{prof_name}]: No previous post logs found. Triggering immediate post...")
+                            self.active_channel_status[prof_name] = f"✅ [{prof_name.upper()}]: Ready to Post (Immediate)"
+                            self.refresh_dashboard_countdown()
                             should_post = True
                         else:
                             safe_last_time = last_post_time.replace(tzinfo=None) if last_post_time.tzinfo else last_post_time
@@ -2540,6 +2559,8 @@ class IslamicReelsStudio(ctk.CTk):
                             if elapsed >= interval_delta:
                                 delta_hrs = elapsed.total_seconds() / 3600
                                 print(f"   > ⏰ Interval [{prof_name}]: {delta_hrs:.2f}h elapsed (Target: {interval_hrs}h). Triggering post...")
+                                self.active_channel_status[prof_name] = f"✅ [{prof_name.upper()}]: Ready to Post"
+                                self.refresh_dashboard_countdown()
                                 should_post = True
                             else:
                                 remaining = interval_delta - elapsed
@@ -2550,14 +2571,13 @@ class IslamicReelsStudio(ctk.CTk):
                                 rem_hrs = rem_mins // 60
                                 rem_mins_rem = rem_mins % 60
                                 status_msg = f"Next post in {rem_hrs}h {rem_mins_rem}m"
-                                # print(f"   > ⏳ Tab [{prof_name}]: Deferring ({status_msg}). Interval requirement not met.")  # suppressed
-                                self.after(0, lambda p=prof_name, m=status_msg: self.lbl_countdown.configure(
-                                    text=f"⏳ [{p.upper()}]: {m}",
-                                    text_color=CHAMPAGNE_SEC
-                                ))
+                                self.active_channel_status[prof_name] = f"⏳ [{prof_name.upper()}]: {status_msg}"
+                                self.refresh_dashboard_countdown()
 
                         if should_post:
                             self.is_uploading = True 
+                            self.active_channel_status[prof_name] = f"🎬 [{prof_name.upper()}]: Rendering & Uploading..."
+                            self.refresh_dashboard_countdown(color="#00D2FF") 
                             
                             try:
                                 with open(local_fallback_file, "w") as f:
@@ -2596,8 +2616,12 @@ class IslamicReelsStudio(ctk.CTk):
                                     print("   > ☁️ Local logs only. Google Sheets logging is disabled for this profile.")
                                     
                                 print(f"\n   > 🕒 {prof_name} Cycle Complete. Moving to next in queue...")
+                                self.active_channel_status[prof_name] = f"✅ [{prof_name.upper()}]: Post Completed"
+                                self.refresh_dashboard_countdown()
                             else:
                                 print(f"\n   > ❌ {prof_name} Pipeline halted. Moving to next in queue...")
+                                self.active_channel_status[prof_name] = f"❌ [{prof_name.upper()}]: Pipeline Halted"
+                                self.refresh_dashboard_countdown()
                             
                             self.is_uploading = False
                             gc.collect()
